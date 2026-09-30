@@ -1,0 +1,11 @@
+{
+  "name": "sce-control-de-estudios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema de Control de Estudios — sitio estático en JavaScript vanilla con backend Google Apps Script + Sheets.",
+  "scripts": {
+    "dev": "python3 -m http.server 5173",
+    "build:gas": "node tools/build-gas.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}
