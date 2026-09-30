@@ -6,7 +6,8 @@
  * navegador sobre localStorage con datos de prueba.
  */
 export const CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbwsTFp-WJtkPMe1mNDDXpMdSgc6hh0YS_9vNQKv0pLhxjTEs7ROcEV19vI5oQZfgDse/exec',
+  // Producción: https://script.google.com/macros/s/AKfycbwsTFp-WJtkPMe1mNDDXpMdSgc6hh0YS_9vNQKv0pLhxjTEs7ROcEV19vI5oQZfgDse/exec
+  API_URL: '',
   // Latencia simulada en modo demo (ms) para ver los estados de carga.
   DEMO_LATENCY: [180, 420],
   REQUEST_TIMEOUT: 30000,
