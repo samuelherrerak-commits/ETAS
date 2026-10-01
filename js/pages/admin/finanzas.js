@@ -4,8 +4,10 @@ import { router } from '../../lib/router.js';
 import { cedula as fmtCed, fecha, relativo, monto, plural, pct } from '../../lib/format.js';
 import {
   pageHeader, loadSection, skeletonTable, button, setLoading, field, emptyState, badge, avatar,
-  searchInput, segmented, tabs, statCard, textarea, table,
+  searchInput, segmented, tabs, statCard, textarea, table, pagoBadge, switchEl,
 } from '../../ui/components.js';
+import { store } from '../../lib/store.js';
+import { mesesGrid, cuentaResumen, historialPagos } from '../shared/cuenta.js';
 import { openModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
@@ -37,38 +39,18 @@ export function finanzasPage({ query }) {
     const wrap = h('div');
 
     function stats() {
-      const morosos = rows.filter((r) => r.estado_pago === 'moroso').length;
-      replace(statsEl, h('div.grid.grid-3.enter-stagger',
+      const morosos = rows.filter((r) => r.estado_pago === 'moroso');
+      const deuda = morosos.reduce((s, r) => s + r.deuda, 0);
+      replace(statsEl, h('div.grid.grid-4.enter-stagger',
         statCard({ label: 'Estudiantes', value: rows.length, iconName: 'users' }),
-        statCard({ label: 'Solventes', value: rows.length - morosos, iconName: 'shield', hint: pct(rows.length ? Math.round(((rows.length - morosos) / rows.length) * 100) : 100) }),
-        statCard({ label: 'Morosos', value: morosos, iconName: 'lock', tone: morosos ? 'red-600' : null, hint: 'Sin acceso a notas ni boletín' })));
-    }
-
-    function toggle(r, sw, labelEl) {
-      const next = r.estado_pago === 'moroso' ? 'solvente' : 'moroso';
-      const prev = r.estado_pago;
-      r.estado_pago = next; // actualización optimista
-      paint(sw, labelEl, next);
-      stats();
-      api.send('updatePaymentStatus', { estudiante_id: r.id, estado_pago: next })
-        .then(() => toast.success(next === 'solvente' ? 'Marcado como solvente' : 'Marcado como moroso',
-          next === 'solvente' ? `${r.nombre} recupera el acceso a sus notas.` : `${r.nombre} no podrá ver notas ni boletín.`))
-        .catch((e) => {
-          r.estado_pago = prev;
-          paint(sw, labelEl, prev);
-          stats();
-          toast.error('No se pudo actualizar', e.message);
-        });
-    }
-
-    function paint(sw, labelEl, estado) {
-      sw.setAttribute('aria-checked', String(estado === 'solvente'));
-      replace(labelEl, estado === 'solvente' ? badge('Solvente', 'green', { dot: true }) : badge('Moroso', 'red', { dot: true }));
+        statCard({ label: 'Solventes', value: rows.length - morosos.length, iconName: 'shield', hint: pct(rows.length ? Math.round(((rows.length - morosos.length) / rows.length) * 100) : 100) }),
+        statCard({ label: 'Insolventes', value: morosos.length, iconName: 'lock', tone: morosos.length ? 'red-600' : null, hint: 'Sin acceso a notas ni boletín' }),
+        statCard({ label: 'Por cobrar (vencido)', value: monto(deuda), iconName: 'wallet', hint: `${store.institucion.moneda || ''} · ${plural(morosos.reduce((s, r) => s + r.vencidos.length, 0), 'mes', 'meses')}` })));
     }
 
     function renderList() {
       const t = fold(term);
-      const visible = rows.filter((r) => (filtro === 'todos' || r.estado_pago === filtro)
+      const visible = rows.filter((r) => (filtro === 'todos' || r.estado_pago === filtro || (filtro === 'exonerado' && r.condicion === 'exonerado'))
         && (!t || fold(`${r.nombre} ${r.cedula} ${r.representantes.join(' ')}`).includes(t)));
       replace(list, h('div.card',
         table({
@@ -76,22 +58,78 @@ export function finanzasPage({ query }) {
             { label: 'Estudiante', render: (r) => h('div.row', { style: { '--gap': '12px' } }, avatar(r.nombre),
               h('div', h('div.cell-title', r.nombre), h('div.cell-sub', `${fmtCed(r.cedula)} · ${r.grado}`))) },
             { label: 'Representante', render: (r) => h('span.cell-sub', r.representantes.join(', ') || '—') },
-            { label: 'Actualizado', render: (r) => h('span.cell-sub', { title: r.observaciones }, relativo(r.ultima_actualizacion) || '—') },
-            { label: 'Estado', render: (r) => {
-              const labelEl = h('span', { style: { minWidth: '84px', display: 'inline-block' } });
-              const sw = h('button.switch', { type: 'button', role: 'switch', 'aria-label': `Solvencia de ${r.nombre}` });
-              sw.addEventListener('click', () => toggle(r, sw, labelEl));
-              paint(sw, labelEl, r.estado_pago);
-              return h('div.row', { style: { '--gap': '12px' } }, sw, labelEl,
-                r.reportes_pendientes ? h('a.badge.badge-amber', { href: '#/admin/finanzas?tab=reportes', title: 'Reporte de pago por validar' }, icon('clock'), String(r.reportes_pendientes)) : null);
-            } },
+            { label: 'Meses pagados', className: 'col-num', render: (r) => r.pagados },
+            { label: 'Deuda', className: 'col-num', render: (r) => (r.vencidos.length
+              ? h('div', h('div.num', { style: { color: 'var(--red-700)', fontWeight: 600 } }, monto(r.deuda)), h('div.cell-sub', plural(r.vencidos.length, 'mes', 'meses')))
+              : h('span.subtle', '—')) },
+            { label: 'Estado', render: (r) => h('div.row', { style: { '--gap': '6px' } },
+              r.condicion === 'exonerado' ? badge('Exonerado', 'blue', { dot: true }) : pagoBadge(r.estado_pago),
+              r.reportes_pendientes ? h('a.badge.badge-amber', { href: '#/admin/finanzas?tab=reportes', title: 'Reporte de pago por validar' }, icon('clock'), String(r.reportes_pendientes)) : null) },
+            { label: '', className: 'col-actions', render: (r) => button({ label: 'Estado de cuenta', size: 'sm', onClick: () => cuentaModal(r) }) },
           ],
           rows: visible,
           empty: emptyState({ iconName: 'search', title: 'Sin resultados', text: 'No hay estudiantes que coincidan con la búsqueda.' }),
         })));
     }
 
-    loadSection(wrap, {
+    /** Estado de cuenta de un estudiante: meses, pago en caja y exoneración. */
+    function cuentaModal(row) {
+      const body = h('div');
+      let modal;
+      const draw = (d) => {
+        const c = d.cuenta;
+        const sel = new Set();
+        const gridBox = h('div');
+        let registrar;
+        const paint = () => {
+          replace(gridBox, mesesGrid(c, { selectable: true, selected: sel, onToggle: (m) => { sel.has(m) ? sel.delete(m) : sel.add(m); paint(); } }));
+          if (registrar) registrar.disabled = !sel.size;
+        };
+        const exon = switchEl({
+          checked: c.condicion === 'exonerado', label: 'Exonerado',
+          onChange: async (v) => {
+            try {
+              const next = await api.send('setCondicion', { estudiante_id: row.id, condicion: v ? 'exonerado' : 'regular', observaciones: v ? 'Exonerado por administración' : '' });
+              toast.success(v ? 'Estudiante exonerado' : 'Régimen regular restablecido');
+              changed = true;
+              draw(next);
+            } catch (e) { exon.set(!v); toast.error('No se pudo actualizar', e.message); }
+          },
+        });
+        registrar = button({
+          label: 'Registrar pago en caja', size: 'sm', variant: 'dark', iconName: 'check', disabled: true,
+          onClick: async () => {
+            setLoading(registrar, true);
+            try {
+              const next = await api.send('registerPayment', { estudiante_id: row.id, meses: [...sel] });
+              toast.success('Pago registrado', `${plural(sel.size, 'mes', 'meses')} · ${row.nombre}`);
+              changed = true;
+              draw(next);
+            } catch (e) { toast.error('No se pudo registrar', e.message); setLoading(registrar, false); }
+          },
+        });
+        paint();
+        replace(body, h('div.stack',
+          cuentaResumen(c),
+          h('div.row-between', h('div', h('div.label', 'Exonerado'), h('div.field-help', 'Beca, convenio o hijo de personal: siempre solvente.')), exon),
+          h('div.label', 'Mensualidades'),
+          gridBox,
+          h('div.row-between.wrap', h('span.cell-sub', 'Seleccione meses pendientes para registrar un pago recibido en caja.'), registrar),
+          d.reportes.length ? h('div.stack', { style: { '--gap': '8px' } }, h('div.label', 'Pagos reportados'), historialPagos(d.reportes)) : null));
+      };
+      let changed = false;
+      modal = openModal({
+        title: row.nombre, description: `${row.grado} · ${fmtCed(row.cedula)}`, iconName: 'wallet', width: 760,
+        body,
+        onClose: () => { if (changed) load.reload(); },
+        footer: ({ close }) => [button({ label: 'Cerrar', onClick: () => close() })],
+      });
+      replace(body, skeletonTable(3));
+      api.get('getEstadoCuenta', { estudiante_id: row.id }, { fresh: true }).then(draw)
+        .catch((e) => { toast.error('No se pudo cargar', e.message); modal.close(); });
+    }
+
+    const load = loadSection(wrap, {
       skeleton: () => skeletonTable(8),
       fetch: () => api.get('listPayments', {}, { fresh: true }),
       render: (data) => {
@@ -101,7 +139,7 @@ export function finanzasPage({ query }) {
         return h('div.stack',
           h('div.toolbar',
             searchInput({ placeholder: 'Buscar por nombre, cédula o representante', onInput: debounce((v) => { term = v; renderList(); }, 120) }),
-            segmented([{ value: 'todos', label: 'Todos' }, { value: 'solvente', label: 'Solventes' }, { value: 'moroso', label: 'Morosos' }],
+            segmented([{ value: 'todos', label: 'Todos' }, { value: 'solvente', label: 'Solventes' }, { value: 'moroso', label: 'Insolventes' }, { value: 'exonerado', label: 'Exonerados' }],
               filtro, (v) => { filtro = v; renderList(); }, { label: 'Filtrar por estado' })),
           list);
       },
@@ -151,6 +189,7 @@ export function finanzasPage({ query }) {
           h('div.row-between',
             h('div', h('div.cell-title', r.estudiante?.nombre || '—'), h('div.cell-sub', r.estudiante?.grado)),
             estadoBadge),
+          r.meses_nombre.length ? h('div.row.wrap', { style: { '--gap': '6px' } }, r.meses_nombre.map((m) => badge(m, 'blue'))) : null,
           h('dl.kv',
             h('dt', 'Monto'), h('dd.num', monto(r.monto)),
             h('dt', 'Banco'), h('dd', r.banco),
@@ -161,12 +200,12 @@ export function finanzasPage({ query }) {
         r.estado === 'pendiente' ? h('div.card-footer.row', { style: { justifyContent: 'flex-end' } },
           button({ label: 'Rechazar', size: 'sm', onClick: () => rechazar(r, refresh) }),
           aprobar = button({
-            label: 'Aprobar y marcar solvente', size: 'sm', variant: 'success', iconName: 'check',
+            label: 'Verificar pago', size: 'sm', variant: 'success', iconName: 'check',
             onClick: async () => {
               setLoading(aprobar, true);
               try {
                 await api.send('reviewPaymentReport', { id: r.id, decision: 'aprobado' });
-                toast.success('Pago validado', `${r.estudiante?.nombre} ahora está solvente.`);
+                toast.success('Pago verificado', `${r.meses_nombre.join(', ')} · ${r.estudiante?.nombre}`);
                 refresh();
               } catch (e) { toast.error('No se pudo aprobar', e.message); setLoading(aprobar, false); }
             },
@@ -209,7 +248,7 @@ export function finanzasPage({ query }) {
     pageHeader({
       eyebrow: 'Administración',
       title: 'Finanzas',
-      subtitle: 'Solvencia de los estudiantes y validación de pagos reportados. Un estudiante moroso no puede consultar notas ni boletín.',
+      subtitle: 'La solvencia se calcula sola por mensualidad: el mes en curso se paga hasta el día límite. Un estudiante insolvente no puede consultar notas ni boletín.',
     }),
     statsEl,
     tabsEl,

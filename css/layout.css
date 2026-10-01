@@ -336,3 +336,61 @@
 @media (max-width: 1000px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
 .lapso-cell .val svg { width: 16px; height: 16px; }
 .matrix td:first-child { min-width: 190px; }
+
+/* Logo institucional */
+.brand-mark.has-logo { background: #fff; padding: 3px; overflow: hidden; }
+.brand-mark.has-logo img { width: 100%; height: 100%; object-fit: contain; border-radius: 6px; }
+
+/* Configuración */
+.config-colors { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; gap: 24px; }
+@media (max-width: 800px) { .config-colors { grid-template-columns: minmax(0, 1fr); } }
+.color-swatch {
+  width: 44px; height: 38px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--surface); cursor: pointer;
+}
+.color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+.color-swatch::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.logo-preview .brand-mark { border-radius: 14px; border: 1px solid var(--border); }
+.theme-preview {
+  display: grid; grid-template-columns: 120px minmax(0, 1fr); min-height: 180px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg);
+}
+.tp-side { background: var(--navy-900); padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.tp-side .brand-mark { background: #fff; color: var(--navy-900); }
+.tp-line { height: 6px; border-radius: 3px; background: rgb(255 255 255 / 0.18); }
+.tp-line.short { width: 60%; }
+.tp-item { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgb(255 255 255 / 0.1); color: #fff; font-size: var(--text-xs); }
+.tp-main { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.tp-title { font-weight: 600; color: var(--navy-900); }
+
+/* Mensualidades */
+.month-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+@media (max-width: 520px) { .month-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.month {
+  position: relative; display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface-sunken); min-height: 58px;
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) ease;
+}
+.month-name { font-weight: 600; font-size: var(--text-sm); text-transform: capitalize; }
+.month-state { font-size: var(--text-xs); color: var(--text-muted); }
+.month-icon { position: absolute; top: 9px; right: 9px; display: inline-flex; }
+.month-icon svg { width: 14px; height: 14px; }
+.month-pagado { background: var(--green-50); border-color: var(--green-100); }
+.month-pagado .month-state, .month-pagado .month-icon { color: var(--green-700); }
+.month-vencido { background: var(--red-50); border-color: var(--red-100); }
+.month-vencido .month-state, .month-vencido .month-icon { color: var(--red-700); }
+.month-por_vencer { background: var(--amber-50); border-color: var(--amber-100); }
+.month-por_vencer .month-state, .month-por_vencer .month-icon { color: var(--amber-700); }
+.month-futuro { background: var(--surface); }
+.month.is-review { border-style: dashed; }
+button.month { cursor: pointer; }
+button.month:active { transform: scale(0.97); }
+@media (hover: hover) { button.month:hover { border-color: var(--border-strong); } }
+.month.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.legend { display: inline-flex; align-items: center; gap: 6px; }
+.legend::before { content: ""; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+.legend-pagado::before { background: var(--green-100); border-color: var(--green-600); }
+.legend-vencido::before { background: var(--red-100); border-color: var(--red-600); }
+.legend-por_vencer::before { background: var(--amber-100); border-color: var(--amber-600); }
+.legend-futuro::before { background: var(--surface); }

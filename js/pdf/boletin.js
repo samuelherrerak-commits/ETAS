@@ -6,59 +6,20 @@
  */
 import { cedula as fmtCed, fecha, redondear } from '../lib/format.js';
 
-let loading = null;
-
-function loadJsPdf() {
-  if (window.jspdf?.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
-  loading ||= new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = new URL('../../vendor/jspdf.umd.min.js', import.meta.url).href;
-    s.onload = () => resolve(window.jspdf.jsPDF);
-    s.onerror = () => { loading = null; reject(new Error('No se pudo cargar el generador de PDF.')); };
-    document.head.append(s);
-  });
-  return loading;
-}
-
-const NAVY = [15, 23, 42];
-const SLATE = [100, 116, 139];
-const LINE = [214, 219, 227];
-const ZEBRA = [247, 248, 250];
-const RED = [185, 28, 28];
-
-function initialsOf(name) {
-  return name.split(/\s+/).filter((w) => w.length > 2 && w[0] === w[0].toUpperCase()).slice(0, 3).map((w) => w[0]).join('') || 'UE';
-}
+import { loadJsPdf, drawMembrete, primaryRgb, SLATE, LINE, ZEBRA, RED } from './membrete.js';
 
 export async function downloadBoletin(inf) {
   const JsPDF = await loadJsPdf();
   const doc = new JsPDF({ unit: 'mm', format: 'a4' });
   const inst = inf.institucion;
   const W = 210, M = 16, CW = W - M * 2;
-  let y = 16;
+  const NAVY = primaryRgb(inst);
+  const INK = [30, 41, 59];
 
   const text = (t, x, yy, opts = {}) => doc.text(String(t ?? ''), x, yy, opts);
-  const font = (style = 'normal', size = 9, color = NAVY) => { doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...color); };
+  const font = (style = 'normal', size = 9, color = INK) => { doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...color); };
 
-  // ── Membrete ───────────────────────────────────────────────────────
-  doc.setFillColor(...NAVY);
-  doc.circle(M + 8, y + 7, 8, 'F');
-  font('bold', 10, [255, 255, 255]);
-  text(initialsOf(inst.nombre), M + 8, y + 8.3, { align: 'center' });
-  font('bold', 13);
-  text(inst.nombre, M + 20, y + 4);
-  font('normal', 8, SLATE);
-  text(`Código DEA ${inst.codigo_dea}  ·  RIF ${inst.rif}`, M + 20, y + 9);
-  text(`${inst.direccion}  ·  ${inst.telefono}`, M + 20, y + 13);
-  font('bold', 10);
-  text('BOLETÍN INFORMATIVO', W - M, y + 4, { align: 'right' });
-  font('normal', 8.5, SLATE);
-  text(`Año escolar ${inf.periodo.nombre}`, W - M, y + 9, { align: 'right' });
-  y += 20;
-  doc.setDrawColor(...NAVY);
-  doc.setLineWidth(0.6);
-  doc.line(M, y, W - M, y);
-  y += 6;
+  let y = await drawMembrete(doc, inst, { titulo: 'BOLETÍN INFORMATIVO', subtitulo: `Año escolar ${inf.periodo.nombre}`, M, W });
 
   // ── Datos ──────────────────────────────────────────────────────────
   const grado = inf.grado ? `${inf.grado.nombre}${inf.grado.seccion ? ` "${inf.grado.seccion}"` : ''}` : '—';

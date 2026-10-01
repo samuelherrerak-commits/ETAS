@@ -10,7 +10,7 @@ const SEED = require('../backend/seed.js');
 function memoryAdapter() {
   const tables = {};
   const a = {
-    now: () => Date.now(),
+    now: () => Date.UTC(2026, 9, 10, 13), // fecha fija: las reglas de solvencia dependen del día
     uuid: () => randomUUID(),
     sha256: (s) => createHash('sha256').update(s, 'utf8').digest('hex'),
     hmac: (s) => createHmac('sha256', 'test-secret').update(s, 'utf8').digest('hex'),

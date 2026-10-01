@@ -35,9 +35,31 @@ Desde el menú del usuario, **Restablecer datos demo** vuelve al estado inicial.
 - **Definitiva** = promedio de las tres notas de lapso redondeadas (9,5 → 10).
 - **Lapsos:** solo se editan planes y notas del lapso activo, y solo mientras la carga esté abierta (la controla administración o coordinación).
 - **Profesor ↔ alumnos:** cada materia pertenece a un grado y a un docente; la lista de clase son los estudiantes activos de ese grado. Un docente solo accede a sus materias.
-- **Morosidad:** un estudiante moroso (o su representante) no recibe calificaciones ni boletín. Se aplica **en el servidor**, no solo en la interfaz.
+- **Solvencia por mensualidad:** se cobran los meses configurados (septiembre a agosto por defecto). El mes en curso se paga del día 1 al día límite (5 por defecto). Desde el día siguiente, cada mes exigible sin pago deja al estudiante **insolvente**, y la deuda se acumula. La fecha se calcula en hora de Venezuela (UTC−4).
+- **Morosidad:** un estudiante insolvente (o su representante) no recibe calificaciones ni boletín. Se aplica **en el servidor**, no solo en la interfaz. Administración puede **exonerar** a un estudiante (beca o convenio).
+- **Pagos:**
+  1. El representante reporta la transferencia e indica los meses que cubre.
+  2. Administración la verifica y esos meses quedan pagados con su fecha de verificación. También puede registrar pagos recibidos en caja.
+  3. Con todo al día, el representante descarga la **constancia de solvencia en PDF**, que lleva un código verificable.
 - **Asistencia:** más de 25 % de inasistencias en una materia la aplaza.
 - **Promoción (cierre académico):** 0 aplazadas → promovido (o egresado en el último año); 1–2 → materia pendiente; 3 o más → repitiente. Se ejecuta una sola vez por año, en el 3er lapso con la carga cerrada, y con confirmación escrita.
+
+## Configuración del plantel
+
+En el portal: **Administración → Configuración**. También directamente en la pestaña **`Config`** del Sheets, donde cada clave tiene su descripción:
+
+| Clave | Uso |
+|---|---|
+| `nombre`, `rif`, `codigo_dea`, `direccion`, `telefono`, `email`, `director`, `ciudad` | Membrete del login, el menú, el boletín y la constancia |
+| `logo` | Imagen del plantel. Súbala desde el portal: se ajusta sola para caber en la celda |
+| `color_primario`, `color_acento` | Colores institucionales (#RRGGBB). Se aplican a todo el portal y a los PDF |
+| `mensualidad_monto`, `moneda` | Monto de la mensualidad |
+| `dia_limite_pago` | Último día para pagar el mes en curso (5) |
+| `mes_inicio_cobro`, `mes_fin_cobro` | Meses que se cobran (9 a 8 = septiembre a agosto) |
+
+## Escalabilidad
+
+Un colegio de unos 700 alumnos funciona bien en Sheets. Para varios colegios, la recomendación es migrar a Supabase. El análisis con cifras y el plan de migración están en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 
 ## Estructura
 
@@ -51,7 +73,7 @@ js/
   lib/                  DOM, router por hash, estado, formato, cálculo de notas
   ui/                   Toasts, modales, shell, componentes
   pages/                admin · coord · profesor · estudiante · representante · shared
-  pdf/boletin.js        Boletín A4 con jsPDF (vendor/, sin CDN)
+  pdf/                  Boletín y constancia de solvencia A4 con jsPDF (vendor/, sin CDN)
 backend/
   core.js               Reglas de negocio, permisos y acciones (fuente única)
   seed.js               Datos de demostración
@@ -74,7 +96,8 @@ Notas:
 - Las contraseñas se guardan con sal y hash SHA-256 iterado; las sesiones usan un token firmado con HMAC cuyo secreto vive en las propiedades del script.
 - Apps Script no permite fijar cabeceras CORS, pero su respuesta final incluye `Access-Control-Allow-Origin: *`. El frontend envía `POST` con `Content-Type: text/plain` para evitar la petición preflight.
 - Las escrituras usan `LockService` para que dos docentes guardando a la vez no se pisen.
-- Cada nueva versión de `Code.gs` requiere **Implementar → Administrar implementaciones → Editar → Nueva versión**.
+- Cada nueva versión de `Code.gs` requiere **Implementar → Administrar implementaciones → Editar → Nueva versión**. Después ejecute `setupDatabase` otra vez: agrega las pestañas y claves nuevas sin borrar datos.
+- **Respaldo diario:** ejecute una vez `instalarRespaldoDiario`. Copia la hoja cada noche a la carpeta "Respaldos SCE" de Drive y conserva 30 copias.
 
 ## Desplegar el frontend
 
@@ -89,11 +112,19 @@ Es un sitio estático: suba la carpeta tal cual.
 npm test
 ```
 
-Cubren login, aislamiento profesor/materia, bloqueo por morosidad, acceso del representante, validación del plan (100 %) y de notas (1–20), lapsos de solo lectura, cálculo ponderado y promoción.
+Cubren:
+- login y límite de intentos;
+- aislamiento entre profesor y materia;
+- acceso del representante;
+- validación del plan (100 %) y de las notas (1–20), y lapsos de solo lectura;
+- cálculo ponderado y promoción;
+- solvencia por fecha (día 5 contra día 6, en hora de Venezuela) y deuda acumulada;
+- exoneración, flujo de reporte → verificación y constancia verificable;
+- validación de la configuración y asistencia dispersa.
 
 ## Esquema de la base de datos
 
 Una pestaña por tabla (encabezados en la fila 1, formato texto plano):
-`Config`, `Periodos`, `Grados`, `Usuarios`, `Relacion_Familiar`, `Materias_Asignadas`, `PlanesEvaluacion`, `Notas`, `Asistencia`, `Pagos`, `Reportes_Pago`, `Avisos`, `Rasgos`, `Materias_Pendientes`, `Promociones`. Las columnas están definidas en `SCHEMA` dentro de `backend/core.js`.
+`Config`, `Periodos`, `Grados`, `Usuarios`, `Relacion_Familiar`, `Materias_Asignadas`, `PlanesEvaluacion`, `Notas`, `Clases`, `Asistencia` (solo ausencias y justificadas), `Pagos` (condición: regular o exonerado), `Mensualidades` (meses pagados), `Reportes_Pago`, `Avisos`, `Rasgos`, `Materias_Pendientes`, `Promociones`. Las columnas están definidas en `SCHEMA` dentro de `backend/core.js`.
 
 Los representantes son usuarios con rol `representante` (se autentican igual que los demás) y se vinculan a sus representados en `Relacion_Familiar`.

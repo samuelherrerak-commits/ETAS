@@ -62,33 +62,6 @@ export function periodoPage() {
           cargaSwitch)));
   }
 
-  function institucionCard() {
-    const inst = store.institucion;
-    const keys = [
-      ['nombre', 'Nombre del plantel'], ['codigo_dea', 'Código DEA'], ['rif', 'RIF'], ['director', 'Director(a)'],
-      ['telefono', 'Teléfono'], ['email', 'Correo de administración'], ['direccion', 'Dirección'], ['ciudad', 'Ciudad'],
-    ];
-    const inputs = Object.fromEntries(keys.map(([k]) => [k, input({ value: inst[k] || '' })]));
-    let save;
-    return h('section.card.enter',
-      h('div.card-header', h('div', h('h2', 'Datos institucionales'), h('p.cell-sub', 'Aparecen en el membrete del boletín y en los avisos de solvencia.'))),
-      h('form.card-body', { onsubmit: (e) => { e.preventDefault(); save.click(); } },
-        h('div.grid.grid-2', keys.map(([k, label]) => field({ label, input: inputs[k] })))),
-      h('div.card-footer.row', { style: { justifyContent: 'flex-end' } },
-        save = button({
-          label: 'Guardar datos', variant: 'primary', iconName: 'save',
-          onClick: async () => {
-            setLoading(save, true);
-            try {
-              const cfg = await api.send('updateInstitucion', Object.fromEntries(keys.map(([k]) => [k, inputs[k].value])));
-              store.patchSession({ institucion: cfg });
-              toast.success('Datos institucionales actualizados');
-            } catch (e) { toast.error('No se pudo guardar', e.message); }
-            setLoading(save, false);
-          },
-        })));
-  }
-
   function nuevoPeriodoCard(p, periodos) {
     const [a, b] = p.nombre.split('-').map(Number);
     const nombre = input({ value: `${a + 1}-${b + 1}`, class: 'mono', style: { maxWidth: '200px' } });
@@ -131,7 +104,8 @@ export function periodoPage() {
     return h('div.stack', { style: { '--gap': '20px' } },
       periodCard(p),
       isAdmin ? nuevoPeriodoCard(p, lastPeriodos) : null,
-      isAdmin ? institucionCard() : null);
+      isAdmin ? h('a.card.card-link.card-pad.row-between', { href: '#/admin/configuracion' },
+        h('div', h('div.cell-title', 'Datos del plantel, logo, colores y cobranza'), h('div.cell-sub', 'Se movieron a Configuración.')), icon('chevronRight')) : null);
   }
   function render(p) { replace(main, build(p)); }
 

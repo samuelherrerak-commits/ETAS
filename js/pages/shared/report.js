@@ -1,7 +1,7 @@
 import { h, icon } from '../../lib/dom.js';
 import { store } from '../../lib/store.js';
 import { LAPSO_LABEL, nota, fecha, pct, plural, cedula as fmtCed, redondear } from '../../lib/format.js';
-import {
+import { brandMark,
   gradePill, badge, emptyState, table, progress, lockState, button, setLoading, callout, statCard,
 } from '../../ui/components.js';
 import { toast } from '../../ui/toast.js';
@@ -12,7 +12,11 @@ function lapsoValor(l) {
 }
 
 export function reportLock(inf, { forName } = {}) {
-  return lockState({ contacto: inf.contacto, nombre: forName ? inf.estudiante.nombre : null });
+  const c = inf.cuenta;
+  return lockState({
+    contacto: inf.contacto, nombre: forName ? inf.estudiante.nombre : null,
+    detalle: c?.vencidos?.length ? `Meses vencidos: ${c.vencidos.join(', ')} · ${c.deuda.toLocaleString('es-VE', { minimumFractionDigits: 2 })} ${c.moneda}` : null,
+  });
 }
 
 export function reportStats(inf) {
@@ -136,7 +140,7 @@ export function boletinView(inf) {
     h('article.card.boletin.enter',
       h('header.boletin-head',
         h('div.school',
-          h('div.brand-mark', icon('cap')),
+          brandMark(inst.logo, { size: 44 }),
           h('div', h('h2', inst.nombre), h('div.cell-sub', `Código DEA ${inst.codigo_dea} · RIF ${inst.rif}`), h('div.cell-sub', inst.direccion))),
         h('div', { style: { textAlign: 'right' } },
           h('div.eyebrow', 'Boletín informativo'),

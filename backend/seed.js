@@ -39,12 +39,12 @@ var SCE_SEED = (function () {
 
     var T = {
       Config: [], Periodos: [], Grados: [], Usuarios: [], Relacion_Familiar: [], Materias_Asignadas: [],
-      PlanesEvaluacion: [], Notas: [], Asistencia: [], Pagos: [], Reportes_Pago: [], Avisos: [],
+      PlanesEvaluacion: [], Notas: [], Clases: [], Asistencia: [], Pagos: [], Mensualidades: [], Reportes_Pago: [], Avisos: [],
       Rasgos: [], Materias_Pendientes: [], Promociones: []
     };
 
     Object.keys(SCE.CONFIG_DEFAULTS).forEach(function (k) {
-      T.Config.push({ clave: k, valor: SCE.CONFIG_DEFAULTS[k] });
+      T.Config.push({ clave: k, valor: SCE.CONFIG_DEFAULTS[k], descripcion: SCE.CONFIG_INFO[k] || '' });
     });
     T.Config.forEach(function (c) { if (c.clave === 'director') c.valor = 'Lcda. Carmen Villalobos'; });
 
@@ -141,15 +141,34 @@ var SCE_SEED = (function () {
       }
     }
 
-    // Solvencia
+    // Solvencia: mensualidades pagadas hasta hoy (los morosos deben el último mes exigible)
     var morosos = { 'est-moroso': true };
     estudiantes.forEach(function (e, i) { if (e.id !== 'est-demo' && e.id !== 'est-sofia' && i % 7 === 4) morosos[e.id] = true; });
-    estudiantes.forEach(function (e) {
-      T.Pagos.push({
-        estudiante_id: e.id, estado_pago: morosos[e.id] ? 'moroso' : 'solvente',
-        ultima_actualizacion: stamp, observaciones: morosos[e.id] ? 'Mensualidad del mes en curso pendiente.' : ''
+    var cfgSeed = {};
+    T.Config.forEach(function (c) { cfgSeed[c.clave] = c.valor; });
+    var hoyVE = SCE.fechaVE(now.getTime());
+    var limiteSeed = Number(cfgSeed.dia_limite_pago) || 5;
+    var mesesPer = SCE.mesesDelPeriodo(periodoNombre, cfgSeed);
+    var exigibles = mesesPer.filter(function (m) { return m < hoyVE.mes || (m === hoyVE.mes && hoyVE.d > limiteSeed); });
+    var mesActual = mesesPer.indexOf(hoyVE.mes) >= 0 ? hoyVE.mes : null;
+    var adeudados = {};
+    var mN = 0;
+    estudiantes.forEach(function (e, i) {
+      T.Pagos.push({ estudiante_id: e.id, condicion: 'regular', ultima_actualizacion: stamp, observaciones: '' });
+      var pagar = exigibles.slice();
+      if (morosos[e.id] && pagar.length) adeudados[e.id] = pagar.splice(pagar.length - (pagar.length > 1 && i % 2 ? 2 : 1));
+      if (!morosos[e.id] && mesActual && exigibles.indexOf(mesActual) < 0 && i % 2 === 0) pagar.push(mesActual);
+      pagar.forEach(function (mes) {
+        var dia = new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)) - 1, 2 + (i % 3));
+        var fv = new Date(Math.min(dia.getTime(), now.getTime() - dayMs));
+        T.Mensualidades.push({
+          id: id('me', ++mN), estudiante_id: e.id, periodo_id: P, mes: mes, monto: Number(cfgSeed.mensualidad_monto) || 85,
+          metodo: i % 5 === 0 ? 'caja' : 'transferencia', reporte_id: '', referencia: i % 5 === 0 ? 'Caja' : 'Pago Móvil ' + String(100000 + ((i * 7919 + mN * 104729) % 899999)),
+          verificado_por: 'usr-admin', fecha_verificacion: fv.toISOString()
+        });
       });
     });
+    var mesesDeudaDe = function (e) { return adeudados[e.id] || (mesActual ? [mesActual] : mesesPer.slice(0, 1)); };
 
     // Planes de evaluación, notas y asistencia
     var planL1 = [['Prueba diagnóstica', 'Prueba corta', 15, -112], ['Taller en clase', 'Taller', 20, -98], ['Examen parcial', 'Examen', 25, -84], ['Proyecto grupal', 'Proyecto', 15, -70], ['Examen final de lapso', 'Examen', 25, -58]];
@@ -159,7 +178,7 @@ var SCE_SEED = (function () {
     var faltones = {};
     estudiantes.forEach(function (e, i) { if (i % 11 === 6) faltones[e.id] = true; });
 
-    var evN = 0, nN = 0, aN = 0;
+    var evN = 0, nN = 0, aN = 0, cN = 0;
     var nota = function (hab) {
       var v = hab + (rnd() - 0.5) * 6;
       return Math.max(1, Math.min(20, Math.round(v)));
@@ -181,11 +200,12 @@ var SCE_SEED = (function () {
       [[1, diasL1], [2, diasL2]].forEach(function (pl) {
         pl[1].forEach(function (d) {
           var fecha = weekday(d);
+          T.Clases.push({ id: id('cl', ++cN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha });
           alumnos.forEach(function (a) {
             var p = faltones[a.id] ? 0.36 : 0.06;
             var r = rnd();
-            var estado = r < p ? (r < p * 0.25 ? 'justificado' : 'ausente') : 'presente';
-            T.Asistencia.push({ id: id('as', ++aN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha, estudiante_id: a.id, estado: estado });
+            if (r >= p) return; // presente: no se guarda
+            T.Asistencia.push({ id: id('as', ++aN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha, estudiante_id: a.id, estado: r < p * 0.25 ? 'justificado' : 'ausente' });
           });
         });
       });
@@ -201,20 +221,37 @@ var SCE_SEED = (function () {
     });
 
     // Reportes de pago
+    var monto1 = Number(cfgSeed.mensualidad_monto) || 85;
+    var mesesDiego = mesesDeudaDe(diego);
     T.Reportes_Pago.push({
       id: 'rp-1', estudiante_id: diego.id, representante_id: repSalazar.id, referencia: '00482917', banco: 'Banesco',
-      monto: 85, fecha_pago: iso(-2), estado: 'pendiente', creado: new Date(now.getTime() - 2 * dayMs).toISOString(), revisado_por: '', observacion: ''
+      monto: monto1 * mesesDiego.length, fecha_pago: iso(-1), estado: 'pendiente', creado: new Date(now.getTime() - dayMs).toISOString(),
+      revisado_por: '', observacion: '', meses: mesesDiego.join(','), fecha_revision: ''
     });
+    var sofiaMes = T.Mensualidades.filter(function (m) { return m.estudiante_id === sofia.id; })[0];
+    if (sofiaMes) {
+      sofiaMes.reporte_id = 'rp-2';
+      sofiaMes.referencia = 'Pago Móvil 00391004';
+      T.Reportes_Pago.push({
+        id: 'rp-2', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00391004', banco: 'Pago Móvil',
+        monto: monto1, fecha_pago: sofiaMes.fecha_verificacion.slice(0, 10), estado: 'aprobado', creado: sofiaMes.fecha_verificacion,
+        revisado_por: 'usr-admin', observacion: '', meses: sofiaMes.mes, fecha_revision: sofiaMes.fecha_verificacion
+      });
+    }
     T.Reportes_Pago.push({
-      id: 'rp-2', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00391004', banco: 'Pago Móvil',
-      monto: 85, fecha_pago: iso(-33), estado: 'aprobado', creado: new Date(now.getTime() - 33 * dayMs).toISOString(), revisado_por: 'usr-admin', observacion: ''
+      id: 'rp-4', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00377120', banco: 'Banesco',
+      monto: monto1, fecha_pago: iso(-40), estado: 'rechazado', creado: new Date(now.getTime() - 40 * dayMs).toISOString(),
+      revisado_por: 'usr-admin', observacion: 'La referencia no aparece en el estado de cuenta bancario. Verifique el número y vuelva a reportar.',
+      meses: mesesPer[0], fecha_revision: new Date(now.getTime() - 39 * dayMs).toISOString()
     });
     var otroMoroso = estudiantes.filter(function (e) { return morosos[e.id] && e.id !== diego.id; })[0];
     if (otroMoroso) {
       var relO = T.Relacion_Familiar.filter(function (r) { return r.estudiante_id === otroMoroso.id; })[0];
+      var mesesO = mesesDeudaDe(otroMoroso);
       T.Reportes_Pago.push({
         id: 'rp-3', estudiante_id: otroMoroso.id, representante_id: relO.representante_id, referencia: '7719203', banco: 'Mercantil',
-        monto: 85, fecha_pago: iso(-1), estado: 'pendiente', creado: new Date(now.getTime() - dayMs).toISOString(), revisado_por: '', observacion: ''
+        monto: monto1 * mesesO.length, fecha_pago: iso(0), estado: 'pendiente', creado: now.toISOString(),
+        revisado_por: '', observacion: '', meses: mesesO.join(','), fecha_revision: ''
       });
     }
 

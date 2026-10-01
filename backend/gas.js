@@ -52,7 +52,11 @@ function sheetsAdapter_() {
     return t.headers.map(function (h) { return row[h] === undefined ? '' : row[h]; });
   }
 
+  var scriptCache = CacheService.getScriptCache();
+
   return {
+    cacheGet: function (k) { return scriptCache.get(k); },
+    cachePut: function (k, v, seg) { scriptCache.put(k, v, seg); },
     now: function () { return Date.now(); },
     uuid: function () { return Utilities.getUuid(); },
     sha256: function (s) {
@@ -102,6 +106,8 @@ function jsonOut_(obj) {
 }
 
 function dispatch_(request) {
+  // Las lecturas no hacen cola: solo las escrituras toman el candado.
+  if (!SCE.isWrite(request && request.action)) return SCE.handle(sheetsAdapter_(), request);
   var lock = LockService.getScriptLock();
   var locked = lock.tryLock(25000);
   if (!locked) return { ok: false, error: { code: 'OCUPADO', message: 'El servidor está ocupado. Intente de nuevo en unos segundos.' } };
@@ -151,6 +157,18 @@ function setupDatabase() {
   if (def && ss.getSheets().length > 1 && def.getLastRow() === 0) ss.deleteSheet(def);
 
   var adapter = sheetsAdapter_();
+  // Apartado de configuración: todas las claves con su descripción, editables en la pestaña Config.
+  var cfgActual = {};
+  adapter.readAll('Config').forEach(function (r) { cfgActual[String(r.clave)] = true; });
+  var faltantes = Object.keys(SCE.CONFIG_DEFAULTS).filter(function (k) { return !cfgActual[k]; });
+  if (faltantes.length) {
+    adapter.append('Config', faltantes.map(function (k) {
+      return { clave: k, valor: SCE.CONFIG_DEFAULTS[k], descripcion: SCE.CONFIG_INFO[k] || '' };
+    }));
+  }
+  var shCfg = ss.getSheetByName('Config');
+  shCfg.setColumnWidth(1, 170); shCfg.setColumnWidth(2, 280); shCfg.setColumnWidth(3, 520);
+
   var db = { periodos: adapter.readAll('Periodos'), grados: adapter.readAll('Grados'), usuarios: adapter.readAll('Usuarios') };
   var now = new Date();
   if (!db.periodos.length) {
@@ -191,4 +209,30 @@ function seedDemoData() {
     }));
   });
   Logger.log('Datos de demostración cargados. Contraseña de todas las cuentas: ' + SCE_SEED.DEMO_PASSWORD);
+}
+
+/**
+ * Respaldo: copia la hoja completa a la carpeta "Respaldos SCE" de Drive y
+ * conserva las últimas 30 copias. Ejecute instalarRespaldoDiario() una vez.
+ */
+function respaldoDiario() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var nombre = 'Respaldos SCE';
+  var it = DriveApp.getFoldersByName(nombre);
+  var carpeta = it.hasNext() ? it.next() : DriveApp.createFolder(nombre);
+  var stamp = Utilities.formatDate(new Date(), 'America/Caracas', 'yyyy-MM-dd HH.mm');
+  DriveApp.getFileById(ss.getId()).makeCopy(ss.getName() + ' · ' + stamp, carpeta);
+  var copias = [];
+  var files = carpeta.getFiles();
+  while (files.hasNext()) copias.push(files.next());
+  copias.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
+  copias.slice(30).forEach(function (f) { f.setTrashed(true); });
+}
+
+function instalarRespaldoDiario() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'respaldoDiario') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('respaldoDiario').timeBased().everyDays(1).atHour(2).create();
+  Logger.log('Respaldo diario programado (2:00 a. m.).');
 }

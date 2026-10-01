@@ -1,7 +1,7 @@
 import { h, icon, replace } from '../lib/dom.js';
 import { store } from '../lib/store.js';
 import { ROL_LABEL, LAPSO_LABEL } from '../lib/format.js';
-import { avatar, field, input, button, setLoading } from './components.js';
+import { brandMark, avatar, field, input, button, setLoading } from './components.js';
 import { openModal, confirmDialog } from './modal.js';
 import { toast } from './toast.js';
 import { api } from '../api/client.js';
@@ -20,6 +20,8 @@ export const NAV = {
     { href: '#/academico/rasgos', label: 'Rasgos de personalidad', iconName: 'smile' },
     { href: '#/avisos', label: 'Cartelera', iconName: 'megaphone' },
     { href: '#/admin/cierre', label: 'Cierre académico', iconName: 'flag' },
+    { section: 'Plantel' },
+    { href: '#/admin/configuracion', label: 'Configuración', iconName: 'settings' },
   ],
   coordinador: [
     { href: '#/academico', label: 'Supervisión', iconName: 'clipboardCheck' },
@@ -36,11 +38,12 @@ export const NAV = {
     { href: '#/estudiante', label: 'Mis notas', iconName: 'book' },
     { href: '#/estudiante/asistencia', label: 'Asistencia', iconName: 'userCheck' },
     { href: '#/estudiante/boletin', label: 'Boletín', iconName: 'file' },
+    { href: '#/estudiante/pagos', label: 'Estado de cuenta', iconName: 'wallet' },
     { href: '#/novedades', label: 'Avisos', iconName: 'megaphone' },
   ],
   representante: [
     { href: '#/representante', label: 'Mis representados', iconName: 'users' },
-    { href: '#/representante/pagos', label: 'Reportar pago', iconName: 'receipt' },
+    { href: '#/representante/pagos', label: 'Pagos', iconName: 'receipt' },
     { href: '#/novedades', label: 'Avisos', iconName: 'megaphone' },
   ],
 };
@@ -170,17 +173,13 @@ export function mountShell(root, { onLogout }) {
   periodEl = h('div.period-chip');
   contentEl = h('main.content#contenido', { tabindex: '-1' });
 
-  const brand = () => h('div.brand',
-    h('div.brand-mark', icon('cap')),
-    h('div.grow', h('div.brand-name', inst.nombre || 'Control de Estudios'), h('div.brand-sub', 'Control de Estudios')));
-
   shellEl = h('div.shell',
     h('aside.sidebar', brand(), periodEl, navEl, userMenu(onLogout)),
     h('div.scrim', { onclick: closeDrawer }),
     h('div.main',
       h('header.topbar',
         h('button.btn.btn-ghost.btn-icon', { 'aria-label': 'Abrir menú', onclick: () => shellEl.classList.add('nav-open') }, icon('menu')),
-        h('div.brand-name.truncate', inst.nombre || 'Control de Estudios')),
+        h('div.brand-name.truncate.topbar-name', inst.nombre || 'Control de Estudios')),
       contentEl));
 
   replace(root, shellEl);
@@ -189,6 +188,21 @@ export function mountShell(root, { onLogout }) {
   store.subscribe(() => { if (periodEl?.isConnected) renderPeriod(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   return contentEl;
+}
+
+function brand() {
+  const inst = store.institucion;
+  return h('div.brand',
+    brandMark(inst.logo),
+    h('div.grow', h('div.brand-name', inst.nombre || 'Control de Estudios'), h('div.brand-sub', 'Control de Estudios')));
+}
+
+/** Redibuja logo y nombre tras cambiar la configuración institucional. */
+export function refreshBrand() {
+  if (!shellEl) return;
+  shellEl.querySelector('.sidebar .brand')?.replaceWith(brand());
+  const t = shellEl.querySelector('.topbar-name');
+  if (t) t.textContent = store.institucion.nombre || 'Control de Estudios';
 }
 
 export function unmountShell() {

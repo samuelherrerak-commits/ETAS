@@ -5,6 +5,7 @@ import { LAPSO_LABEL } from '../../lib/format.js';
 import { pageHeader, loadSection, skeletonCards, skeletonStats, skeletonTable } from '../../ui/components.js';
 import { reportLock, reportStats, reportCards, materiaDetalle, asistenciaView, boletinView } from '../shared/report.js';
 import { avisosWidget } from '../shared/avisos.js';
+import { estadoCuentaView } from '../shared/cuenta.js';
 
 const fetchReport = (o) => api.get('getStudentReport', {}, o);
 
@@ -79,5 +80,17 @@ export function estudianteBoletinPage() {
   });
   return h('div.stack', { style: { '--gap': '24px' } },
     pageHeader({ eyebrow: eyebrow(), title: 'Boletín', subtitle: 'Consulta y descarga tu boletín informativo.' }),
+    content);
+}
+
+export function estudiantePagosPage() {
+  const content = h('div');
+  loadSection(content, {
+    skeleton: () => skeletonTable(4),
+    fetch: () => api.get('getEstadoCuenta', {}, { fresh: true }),
+    render: (d) => estadoCuentaView(d),
+  });
+  return h('div.stack', { style: { '--gap': '24px' } },
+    pageHeader({ eyebrow: eyebrow(), title: 'Estado de cuenta', subtitle: 'Mensualidades del año escolar. Tu representante reporta los pagos.' }),
     content);
 }

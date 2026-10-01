@@ -2,7 +2,7 @@ import { h, icon, initials, append, replace } from '../lib/dom.js';
 import { api } from '../api/client.js';
 import { store } from '../lib/store.js';
 import { ROL_LABEL, cedula as fmtCedula } from '../lib/format.js';
-import { button, field, input, setLoading, callout } from '../ui/components.js';
+import { brandMark, button, field, input, setLoading, callout } from '../ui/components.js';
 import { toast } from '../ui/toast.js';
 import { IS_DEMO } from '../config.js';
 
@@ -69,7 +69,7 @@ export function loginPage({ onSuccess }) {
   return h('div.login',
     h('aside.login-aside',
       h('div.brand', { style: { padding: 0 } },
-        h('div.brand-mark', icon('cap')),
+        brandMark(inst.logo),
         h('div', h('div.brand-name', inst.nombre || 'Unidad Educativa'), h('div.brand-sub', 'Sistema de Control de Estudios'))),
       h('div.login-quote.enter',
         h('h2', 'La vida académica del colegio, en un solo lugar.'),

@@ -50,7 +50,7 @@ var SCE = (function () {
    * porque Sheets (en formato texto plano) devuelve todo como string.
    */
   var SCHEMA = {
-    Config: { key: 'clave', cols: ['clave', 'valor'] },
+    Config: { key: 'clave', cols: ['clave', 'valor', 'descripcion'] },
     Periodos: {
       cols: ['id', 'nombre', 'lapso_activo', 'carga_abierta', 'estado', 'promocion_ejecutada', 'creado'],
       num: ['lapso_activo'], bool: ['carga_abierta', 'promocion_ejecutada']
@@ -64,10 +64,18 @@ var SCE = (function () {
       num: ['lapso', 'porcentaje']
     },
     Notas: { cols: ['id', 'estudiante_id', 'evaluacion_id', 'calificacion', 'actualizado'], num: ['calificacion'] },
+    // Asistencia dispersa: solo se guardan ausencias y justificadas; las clases
+    // dictadas viven en Clases. Reduce ~20× las filas frente a guardar presentes.
+    Clases: { cols: ['id', 'materia_id', 'periodo_id', 'lapso', 'fecha'], num: ['lapso'] },
     Asistencia: { cols: ['id', 'materia_id', 'periodo_id', 'lapso', 'fecha', 'estudiante_id', 'estado'], num: ['lapso'] },
-    Pagos: { key: 'estudiante_id', cols: ['estudiante_id', 'estado_pago', 'ultima_actualizacion', 'observaciones'] },
+    // Excepciones de cobro por estudiante. La solvencia NO se guarda: se calcula.
+    Pagos: { key: 'estudiante_id', cols: ['estudiante_id', 'condicion', 'ultima_actualizacion', 'observaciones'] },
+    Mensualidades: {
+      cols: ['id', 'estudiante_id', 'periodo_id', 'mes', 'monto', 'metodo', 'reporte_id', 'referencia', 'verificado_por', 'fecha_verificacion'],
+      num: ['monto']
+    },
     Reportes_Pago: {
-      cols: ['id', 'estudiante_id', 'representante_id', 'referencia', 'banco', 'monto', 'fecha_pago', 'estado', 'creado', 'revisado_por', 'observacion'],
+      cols: ['id', 'estudiante_id', 'representante_id', 'referencia', 'banco', 'monto', 'fecha_pago', 'estado', 'creado', 'revisado_por', 'observacion', 'meses', 'fecha_revision'],
       num: ['monto']
     },
     Avisos: { cols: ['id', 'titulo', 'contenido', 'fecha', 'roles_destino', 'prioridad', 'autor_id'] },
@@ -87,8 +95,40 @@ var SCE = (function () {
     telefono: '(0212) 000-0000',
     email: 'administracion@colegio.edu.ve',
     director: 'Director(a)',
-    ciudad: 'Caracas'
+    ciudad: 'Caracas',
+    logo: '',
+    color_primario: '#0f172a',
+    color_acento: '#2563eb',
+    mensualidad_monto: '85',
+    moneda: 'USD',
+    dia_limite_pago: '5',
+    mes_inicio_cobro: '9',
+    mes_fin_cobro: '8'
   };
+
+  /** Ayuda que se escribe en la columna "descripcion" de la pestaña Config. */
+  var CONFIG_INFO = {
+    nombre: 'Nombre del plantel (membrete, login y PDF).',
+    codigo_dea: 'Código DEA asignado por el Ministerio.',
+    rif: 'RIF de la institución.',
+    direccion: 'Dirección completa.',
+    telefono: 'Teléfono de administración.',
+    email: 'Correo de administración.',
+    director: 'Nombre del director(a) que firma boletines.',
+    ciudad: 'Ciudad.',
+    logo: 'Logo como imagen data:image/... (súbalo desde Configuración en el portal).',
+    color_primario: 'Color institucional principal en hexadecimal (#RRGGBB). Barra lateral y encabezados.',
+    color_acento: 'Color de acento en hexadecimal (#RRGGBB). Botones y enlaces.',
+    mensualidad_monto: 'Monto de la mensualidad.',
+    moneda: 'Moneda de la mensualidad (USD, Bs., EUR).',
+    dia_limite_pago: 'Último día del mes para pagar el mes en curso sin quedar insolvente (1 a 28).',
+    mes_inicio_cobro: 'Primer mes que se cobra en el año escolar (1 = enero … 12 = diciembre).',
+    mes_fin_cobro: 'Último mes que se cobra en el año escolar (1 a 12).'
+  };
+
+  var MESES_NOMBRE = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  var LOGIN_MAX_INTENTOS = 5;
+  var LOGIN_BLOQUEO_SEG = 15 * 60;
 
   // ───────────────────────────── utilidades ─────────────────────────────
 
@@ -213,6 +253,19 @@ var SCE = (function () {
 
   Db.prototype.where = function (table, pred) { return this.all(table).filter(pred); };
 
+  /** Índice memoizado (agrupación por clave) que se invalida al escribir la tabla. */
+  Db.prototype.index = function (table, col) {
+    this.idx = this.idx || {};
+    var k = table + '.' + col;
+    if (!this.idx[k]) this.idx[k] = groupBy(this.all(table), col);
+    return this.idx[k];
+  };
+
+  Db.prototype.touch = function (table) {
+    if (!this.idx) return;
+    for (var k in this.idx) if (k.indexOf(table + '.') === 0) delete this.idx[k];
+  };
+
   Db.prototype.get = function (table, key) {
     var k = this.keyOf(table);
     var rows = this.all(table);
@@ -234,6 +287,7 @@ var SCE = (function () {
     });
     this.adapter.append(table, norm.map(function (r) { return serializeRow(table, r); }));
     Array.prototype.push.apply(list, norm);
+    this.touch(table);
     return norm;
   };
 
@@ -255,6 +309,7 @@ var SCE = (function () {
       touched.push(list[i]);
     });
     this.adapter.update(table, key, touched.map(function (r) { return serializeRow(table, r); }));
+    this.touch(table);
     return touched;
   };
 
@@ -269,6 +324,7 @@ var SCE = (function () {
     keys.forEach(function (k) { set[k] = true; });
     this.cache[table] = this.all(table).filter(function (r) { return !set[r[key]]; });
     this.adapter.remove(table, key, keys);
+    this.touch(table);
   };
 
   // ───────────────────────────── seguridad ─────────────────────────────
@@ -352,6 +408,94 @@ var SCE = (function () {
     };
   }
 
+  // ─────────────────────────── cobranza mensual ───────────────────────────
+
+  /** Fecha civil en Venezuela (UTC−4 fijo, sin horario de verano). */
+  function fechaVE(nowMs) {
+    var d = new Date(nowMs - 4 * 3600 * 1000);
+    var y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
+    return { y: y, m: m, d: day, mes: y + '-' + pad2(m), iso: y + '-' + pad2(m) + '-' + pad2(day) };
+  }
+
+  function nombreMes(mes) {
+    var p = mes.split('-');
+    var n = MESES_NOMBRE[Number(p[1]) - 1] || mes;
+    return n.charAt(0).toUpperCase() + n.slice(1) + ' ' + p[0];
+  }
+
+  /** Meses que se cobran en un año escolar "AAAA-AAAA" según la configuración. */
+  function mesesDelPeriodo(nombre, cfg) {
+    var y = Number(String(nombre).split('-')[0]);
+    var ini = Number(cfg.mes_inicio_cobro) || 9;
+    var fin = Number(cfg.mes_fin_cobro) || 8;
+    if (!y) return [];
+    var out = [];
+    var m = ini;
+    for (var i = 0; i < 12; i++) {
+      out.push(y + '-' + pad2(m));
+      if (m === fin) break;
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+    return out;
+  }
+
+  /**
+   * Regla de solvencia: el mes en curso se paga del día 1 al día límite
+   * (5 por defecto). Desde el día siguiente, cada mes exigible sin pago deja
+   * al estudiante insolvente. Los meses anteriores adeudados se acumulan.
+   */
+  function estadoCuenta(ctx, estId, periodo) {
+    var cfg = ctx.config();
+    var pago = ctx.db.get('Pagos', estId);
+    var exonerado = !!pago && pago.condicion === 'exonerado';
+    var limite = Math.min(28, Math.max(1, Number(cfg.dia_limite_pago) || 5));
+    var monto = Number(cfg.mensualidad_monto) || 0;
+    var hoy = fechaVE(ctx.adapter.now());
+    var base = {
+      condicion: exonerado ? 'exonerado' : 'regular',
+      observaciones: pago ? pago.observaciones : '',
+      monto_mensual: monto, moneda: cfg.moneda, dia_limite: limite, hoy: hoy.iso
+    };
+    if (!periodo) {
+      base.estado = 'solvente'; base.meses = []; base.vencidos = []; base.deuda = 0;
+      return base;
+    }
+    var pagados = {};
+    (ctx.db.index('Mensualidades', 'estudiante_id')[estId] || []).forEach(function (r) {
+      if (r.periodo_id === periodo.id) pagados[r.mes] = r;
+    });
+    var enRevision = {};
+    (ctx.db.index('Reportes_Pago', 'estudiante_id')[estId] || []).forEach(function (r) {
+      if (r.estado === 'pendiente') str(r.meses).split(',').forEach(function (m) { if (m) enRevision[m] = r.id; });
+    });
+    var meses = mesesDelPeriodo(periodo.nombre, cfg).map(function (mes) {
+      var p = pagados[mes];
+      var estado;
+      if (p) estado = 'pagado';
+      else if (mes < hoy.mes) estado = 'vencido';
+      else if (mes === hoy.mes) estado = hoy.d > limite ? 'vencido' : 'por_vencer';
+      else estado = 'futuro';
+      return {
+        mes: mes, nombre: nombreMes(mes), estado: estado, en_revision: !!enRevision[mes],
+        fecha_verificacion: p ? p.fecha_verificacion : '', referencia: p ? p.referencia : '',
+        metodo: p ? p.metodo : '', monto: p ? p.monto : null
+      };
+    });
+    var vencidos = meses.filter(function (m) { return m.estado === 'vencido'; }).map(function (m) { return m.mes; });
+    base.estado = exonerado || !vencidos.length ? 'solvente' : 'moroso';
+    base.meses = meses;
+    base.vencidos = vencidos;
+    base.deuda = exonerado ? 0 : round2(vencidos.length * monto);
+    return base;
+  }
+
+  /** Código de verificación de una constancia: cédula-fecha-firma. */
+  function codigoConstancia(adapter, cedula, fecha) {
+    var f = fecha.replace(/-/g, '');
+    return cedula + '-' + f + '-' + adapter.hmac('constancia|' + cedula + '|' + f).slice(0, 8).toUpperCase();
+  }
+
   // ───────────────────────────── contexto ─────────────────────────────
 
   function Ctx(adapter, db, user) {
@@ -409,9 +553,23 @@ var SCE = (function () {
   };
 
   Ctx.prototype.estadoPago = function (estudianteId) {
-    var p = this.db.get('Pagos', estudianteId);
-    return p ? p.estado_pago : 'solvente';
+    return this.cuenta(estudianteId).estado;
   };
+
+  Ctx.prototype.periodoActivo = function () {
+    return this.db.where('Periodos', function (p) { return p.estado === 'activo'; })[0] || null;
+  };
+
+  /** Estado de cuenta memoizado por petición (se recalcula tras escribir pagos). */
+  Ctx.prototype.cuenta = function (estudianteId, periodo) {
+    periodo = periodo || this.periodoActivo();
+    var k = estudianteId + '|' + (periodo ? periodo.id : '');
+    this._cuentas = this._cuentas || {};
+    if (!this._cuentas[k]) this._cuentas[k] = estadoCuenta(this, estudianteId, periodo);
+    return this._cuentas[k];
+  };
+
+  Ctx.prototype.invalidarCuentas = function () { this._cuentas = null; };
 
   Ctx.prototype.hijosDe = function (repId) {
     var ids = {};
@@ -458,9 +616,9 @@ var SCE = (function () {
   };
 
   Ctx.prototype.evaluaciones = function (materiaId, periodoId, lapso) {
-    return this.db.where('PlanesEvaluacion', function (e) {
-      return e.materia_id === materiaId && e.periodo_id === periodoId && (lapso === undefined || e.lapso === Number(lapso));
-    }).sort(function (a, b) { return (a.fecha || '9999').localeCompare(b.fecha || '9999') || a.titulo.localeCompare(b.titulo); });
+    return (this.db.index('PlanesEvaluacion', 'materia_id')[materiaId] || []).filter(function (e) {
+      return e.periodo_id === periodoId && (lapso === undefined || e.lapso === Number(lapso));
+    }).slice().sort(function (a, b) { return (a.fecha || '9999').localeCompare(b.fecha || '9999') || a.titulo.localeCompare(b.titulo); });
   };
 
   /** Mapa estudiante_id → evaluacion_id → calificación. */
@@ -468,9 +626,12 @@ var SCE = (function () {
     var set = {};
     evaluacionIds.forEach(function (id) { set[id] = true; });
     var out = {};
-    this.db.all('Notas').forEach(function (n) {
-      if (!set[n.evaluacion_id] || n.calificacion === null) return;
-      (out[n.estudiante_id] = out[n.estudiante_id] || {})[n.evaluacion_id] = n.calificacion;
+    var porEval = this.db.index('Notas', 'evaluacion_id');
+    evaluacionIds.forEach(function (id) {
+      (porEval[id] || []).forEach(function (n) {
+        if (n.calificacion === null) return;
+        (out[n.estudiante_id] = out[n.estudiante_id] || {})[n.evaluacion_id] = n.calificacion;
+      });
     });
     return out;
   };
@@ -478,10 +639,12 @@ var SCE = (function () {
   /** Asistencia de una materia: clases dictadas y ausencias por estudiante. */
   Ctx.prototype.resumenAsistencia = function (materiaId, periodoId, lapso) {
     var fechas = {}, porEst = {};
-    this.db.all('Asistencia').forEach(function (a) {
-      if (a.materia_id !== materiaId || a.periodo_id !== periodoId) return;
-      if (lapso !== undefined && a.lapso !== Number(lapso)) return;
+    var enRango = function (x) { return x.periodo_id === periodoId && (lapso === undefined || x.lapso === Number(lapso)); };
+    (this.db.index('Clases', 'materia_id')[materiaId] || []).forEach(function (c) { if (enRango(c)) fechas[c.fecha] = true; });
+    (this.db.index('Asistencia', 'materia_id')[materiaId] || []).forEach(function (a) {
+      if (!enRango(a)) return;
       fechas[a.fecha] = true;
+      if (a.estado === 'presente') return; // compatibilidad con registros antiguos
       var r = porEst[a.estudiante_id] = porEst[a.estudiante_id] || { ausencias: 0, justificadas: 0 };
       if (a.estado === 'ausente') r.ausencias++;
       if (a.estado === 'justificado') r.justificadas++;
@@ -508,8 +671,8 @@ var SCE = (function () {
     var profes = indexBy(db.where('Usuarios', function (u) { return u.rol === 'profesor'; }), 'id');
 
     var notasEst = {};
-    db.all('Notas').forEach(function (n) {
-      if (n.estudiante_id === est.id && n.calificacion !== null) notasEst[n.evaluacion_id] = n.calificacion;
+    (db.index('Notas', 'estudiante_id')[est.id] || []).forEach(function (n) {
+      if (n.calificacion !== null) notasEst[n.evaluacion_id] = n.calificacion;
     });
 
     var totalClases = 0, totalAus = 0;
@@ -685,6 +848,12 @@ var SCE = (function () {
 
   function action(name, roles, fn) { A[name] = { roles: roles, fn: fn }; }
 
+  /** Acciones que escriben: solo estas toman el candado en Apps Script. */
+  var ESCRITURAS = ['changePassword', 'saveAviso', 'deleteAviso', 'setLapso', 'setCargaAbierta', 'openNewPeriod',
+    'updateInstitucion', 'saveGrado', 'deleteGrado', 'saveMateria', 'deleteMateria', 'saveUser', 'resetPassword',
+    'setCondicion', 'registerPayment', 'reviewPaymentReport', 'reportPayment', 'saveEvaluationPlan', 'saveGrades',
+    'markAttendance', 'saveTraits', 'executePromotion'];
+
   var STAFF = ['admin', 'coordinador'];
   var TODOS = ROLES;
 
@@ -695,18 +864,29 @@ var SCE = (function () {
   /** Datos públicos para la pantalla de acceso (nombre del colegio). */
   action('publicInfo', null, function (ctx) {
     var cfg = ctx.config();
-    return { nombre: cfg.nombre, ciudad: cfg.ciudad, telefono: cfg.telefono, email: cfg.email };
+    return {
+      nombre: cfg.nombre, ciudad: cfg.ciudad, telefono: cfg.telefono, email: cfg.email,
+      logo: cfg.logo, color_primario: cfg.color_primario, color_acento: cfg.color_acento
+    };
   });
 
   action('login', null, function (ctx, p) {
     var ced = normCedula(p.cedula);
     var pass = str(p.password);
     assert(ced && pass, 'Ingrese su cédula y contraseña.');
+    var a = ctx.adapter;
+    var clave = 'login:' + ced;
+    var intentos = Number((a.cacheGet && a.cacheGet(clave)) || 0);
+    if (intentos >= LOGIN_MAX_INTENTOS) fail('BLOQUEADO', 'Demasiados intentos fallidos. Espere 15 minutos e intente de nuevo.');
     var u = ctx.db.where('Usuarios', function (x) { return x.cedula === ced; })[0];
-    if (!u || !verifyPassword(ctx.adapter, pass, u.password_hash)) fail('CREDENCIALES', 'Cédula o contraseña incorrecta.');
+    if (!u || !verifyPassword(a, pass, u.password_hash)) {
+      if (a.cachePut) a.cachePut(clave, String(intentos + 1), LOGIN_BLOQUEO_SEG);
+      fail('CREDENCIALES', 'Cédula o contraseña incorrecta.');
+    }
     if (u.estado !== 'activo') fail('INACTIVO', 'Su cuenta no está activa. Contacte a la administración.');
+    if (intentos && a.cachePut) a.cachePut(clave, '0', 1);
     ctx.user = u;
-    return { token: issueToken(ctx.adapter, u), session: A.session.fn(ctx, {}) };
+    return { token: issueToken(a, u), session: A.session.fn(ctx, {}) };
   });
 
   action('session', TODOS, function (ctx) {
@@ -838,18 +1018,35 @@ var SCE = (function () {
     })[0];
   });
 
+  var VALIDAR_CONFIG = {
+    color_primario: function (v) { assert(/^#[0-9a-fA-F]{6}$/.test(v), 'El color principal debe tener el formato #RRGGBB.'); return v.toLowerCase(); },
+    color_acento: function (v) { assert(/^#[0-9a-fA-F]{6}$/.test(v), 'El color de acento debe tener el formato #RRGGBB.'); return v.toLowerCase(); },
+    logo: function (v) {
+      assert(!v || /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+\/=]+$/.test(v), 'El logo debe ser una imagen PNG, JPG o WebP.');
+      assert(v.length <= 45000, 'El logo es demasiado grande. Use una imagen más pequeña.');
+      return v;
+    },
+    mensualidad_monto: function (v) { var n = Number(v); assert(isFinite(n) && n > 0, 'El monto de la mensualidad debe ser mayor que 0.'); return String(round2(n)); },
+    dia_limite_pago: function (v) { var n = Number(v); assert(n >= 1 && n <= 28 && Math.floor(n) === n, 'El día límite debe ser un entero entre 1 y 28.'); return String(n); },
+    mes_inicio_cobro: function (v) { var n = Number(v); assert(n >= 1 && n <= 12 && Math.floor(n) === n, 'Mes de inicio inválido.'); return String(n); },
+    mes_fin_cobro: function (v) { var n = Number(v); assert(n >= 1 && n <= 12 && Math.floor(n) === n, 'Mes final inválido.'); return String(n); },
+    nombre: function (v) { assert(v.length >= 3, 'Indique el nombre del plantel.'); return v; }
+  };
+
   action('updateInstitucion', ['admin'], function (ctx, p) {
     var db = ctx.db;
     var existentes = indexBy(db.all('Config'), 'clave');
     var nuevos = [], cambios = [];
     Object.keys(CONFIG_DEFAULTS).forEach(function (k) {
       if (p[k] === undefined) return;
-      var v = str(p[k]).slice(0, 200);
-      if (existentes[k]) cambios.push({ key: k, patch: { valor: v } });
-      else nuevos.push({ clave: k, valor: v });
+      var v = str(p[k]);
+      v = VALIDAR_CONFIG[k] ? VALIDAR_CONFIG[k](v) : v.slice(0, 200);
+      if (existentes[k]) cambios.push({ key: k, patch: { valor: v, descripcion: CONFIG_INFO[k] || '' } });
+      else nuevos.push({ clave: k, valor: v, descripcion: CONFIG_INFO[k] || '' });
     });
     db.updateMany('Config', cambios);
     db.insert('Config', nuevos);
+    ctx.invalidarCuentas();
     return ctx.config();
   });
 
@@ -984,7 +1181,7 @@ var SCE = (function () {
     }
 
     if (rol === 'estudiante' && !db.get('Pagos', user.id)) {
-      db.insert('Pagos', { estudiante_id: user.id, estado_pago: 'solvente', ultima_actualizacion: ctx.stamp(), observaciones: '' });
+      db.insert('Pagos', { estudiante_id: user.id, condicion: 'regular', ultima_actualizacion: ctx.stamp(), observaciones: '' });
     }
 
     if (rol === 'representante' && Array.isArray(p.hijos)) {
@@ -1014,34 +1211,92 @@ var SCE = (function () {
     var grados = indexBy(db.all('Grados'), 'id');
     var pend = groupBy(db.where('Reportes_Pago', function (r) { return r.estado === 'pendiente'; }), 'estudiante_id');
     return db.where('Usuarios', function (u) { return u.rol === 'estudiante' && u.estado === 'activo'; }).sort(byNombre).map(function (u) {
-      var pago = db.get('Pagos', u.id) || { estado_pago: 'solvente', ultima_actualizacion: '', observaciones: '' };
+      var c = ctx.cuenta(u.id);
       return {
         id: u.id, nombre: u.nombre, cedula: u.cedula,
         grado: grados[u.grado_id] ? grados[u.grado_id].nombre : '',
         grado_id: u.grado_id,
-        estado_pago: pago.estado_pago, ultima_actualizacion: pago.ultima_actualizacion, observaciones: pago.observaciones,
+        estado_pago: c.estado, condicion: c.condicion, vencidos: c.vencidos, deuda: c.deuda,
+        pagados: c.meses.filter(function (m) { return m.estado === 'pagado'; }).length,
         representantes: ctx.representantesDe(u.id).map(function (r) { return r.nombre; }),
         reportes_pendientes: (pend[u.id] || []).length
       };
     });
   });
 
-  action('updatePaymentStatus', ['admin'], function (ctx, p) {
+  /** Exonerar (beca, convenio, hijo de personal) o volver a régimen regular. */
+  action('setCondicion', ['admin'], function (ctx, p) {
     var est = ctx.usuario(str(p.estudiante_id), 'estudiante');
-    assert(p.estado_pago === 'solvente' || p.estado_pago === 'moroso', 'Estado de pago inválido.');
-    var row = { estado_pago: p.estado_pago, ultima_actualizacion: ctx.stamp(), observaciones: str(p.observaciones).slice(0, 300) };
+    assert(p.condicion === 'regular' || p.condicion === 'exonerado', 'Condición inválida.');
+    var row = { condicion: p.condicion, ultima_actualizacion: ctx.stamp(), observaciones: str(p.observaciones).slice(0, 300) };
     if (ctx.db.get('Pagos', est.id)) ctx.db.update('Pagos', est.id, row);
     else { row.estudiante_id = est.id; ctx.db.insert('Pagos', row); }
-    return { estudiante_id: est.id, estado_pago: row.estado_pago, ultima_actualizacion: row.ultima_actualizacion };
+    ctx.invalidarCuentas();
+    return A.getEstadoCuenta.fn(ctx, { estudiante_id: est.id });
+  });
+
+  function validarMeses(ctx, est, meses, permitirReporteId) {
+    var periodo = ctx.periodo();
+    var c = ctx.cuenta(est.id, periodo);
+    var porMes = indexBy(c.meses, 'mes');
+    var lista = (Array.isArray(meses) ? meses : []).map(str).filter(Boolean);
+    assert(lista.length, 'Seleccione al menos un mes.');
+    var vistos = {};
+    lista.forEach(function (m) {
+      assert(porMes[m], 'El mes ' + m + ' no pertenece al año escolar ' + periodo.nombre + '.');
+      assert(!vistos[m], 'Hay meses repetidos.');
+      vistos[m] = true;
+      assert(porMes[m].estado !== 'pagado', porMes[m].nombre + ' ya está pagado.');
+    });
+    if (permitirReporteId !== true) {
+      (ctx.db.index('Reportes_Pago', 'estudiante_id')[est.id] || []).forEach(function (r) {
+        if (r.estado !== 'pendiente' || r.id === permitirReporteId) return;
+        str(r.meses).split(',').forEach(function (m) {
+          assert(!vistos[m], nombreMes(m) + ' ya está en un reporte pendiente de validación.');
+        });
+      });
+    }
+    return lista.sort();
+  }
+
+  function registrarMensualidades(ctx, est, meses, datos) {
+    var periodo = ctx.periodo();
+    var monto = Number(ctx.config().mensualidad_monto) || 0;
+    var ya = {};
+    (ctx.db.index('Mensualidades', 'estudiante_id')[est.id] || []).forEach(function (r) { if (r.periodo_id === periodo.id) ya[r.mes] = true; });
+    ctx.db.insert('Mensualidades', meses.filter(function (m) { return !ya[m]; }).map(function (m) {
+      return {
+        estudiante_id: est.id, periodo_id: periodo.id, mes: m, monto: datos.monto !== undefined ? datos.monto : monto,
+        metodo: datos.metodo, reporte_id: datos.reporte_id || '', referencia: datos.referencia || '',
+        verificado_por: ctx.user.id, fecha_verificacion: ctx.stamp()
+      };
+    }));
+    ctx.invalidarCuentas();
+  }
+
+  /** Pago recibido en caja (efectivo, punto de venta) registrado por administración. */
+  action('registerPayment', ['admin'], function (ctx, p) {
+    var est = ctx.usuario(str(p.estudiante_id), 'estudiante');
+    var meses = validarMeses(ctx, est, p.meses, true);
+    var referencia = str(p.referencia).slice(0, 40);
+    var montoTotal = p.monto === undefined || p.monto === '' ? null : Number(p.monto);
+    assert(montoTotal === null || (isFinite(montoTotal) && montoTotal > 0), 'Monto inválido.');
+    registrarMensualidades(ctx, est, meses, {
+      metodo: 'caja', referencia: referencia || 'Caja',
+      monto: montoTotal === null ? undefined : round2(montoTotal / meses.length)
+    });
+    return A.getEstadoCuenta.fn(ctx, { estudiante_id: est.id });
   });
 
   function reporteDTO(ctx, r) {
     var est = ctx.db.get('Usuarios', r.estudiante_id);
     var rep = ctx.db.get('Usuarios', r.representante_id);
     var grado = est ? ctx.db.get('Grados', est.grado_id) : null;
+    var meses = str(r.meses).split(',').filter(Boolean);
     return {
       id: r.id, referencia: r.referencia, banco: r.banco, monto: r.monto, fecha_pago: r.fecha_pago,
-      estado: r.estado, creado: r.creado, observacion: r.observacion,
+      estado: r.estado, creado: r.creado, observacion: r.observacion, fecha_revision: r.fecha_revision,
+      meses: meses, meses_nombre: meses.map(nombreMes),
       estudiante: est ? { id: est.id, nombre: est.nombre, grado: grado ? grado.nombre : '' } : null,
       representante: rep ? { id: rep.id, nombre: rep.nombre, telefono: rep.telefono } : null
     };
@@ -1061,11 +1316,65 @@ var SCE = (function () {
     assert(p.decision === 'aprobado' || p.decision === 'rechazado', 'Decisión inválida.');
     var obs = str(p.observacion).slice(0, 300);
     if (p.decision === 'rechazado') assert(obs.length >= 3, 'Indique el motivo del rechazo.');
-    ctx.db.update('Reportes_Pago', r.id, { estado: p.decision, revisado_por: ctx.user.id, observacion: obs });
+    ctx.db.update('Reportes_Pago', r.id, { estado: p.decision, revisado_por: ctx.user.id, observacion: obs, fecha_revision: ctx.stamp() });
     if (p.decision === 'aprobado') {
-      A.updatePaymentStatus.fn(ctx, { estudiante_id: r.estudiante_id, estado_pago: 'solvente', observaciones: 'Pago validado. Ref. ' + r.referencia });
+      var est = ctx.usuario(r.estudiante_id, 'estudiante');
+      var meses = str(r.meses).split(',').filter(Boolean);
+      registrarMensualidades(ctx, est, meses, {
+        metodo: 'transferencia', reporte_id: r.id, referencia: r.banco + ' ' + r.referencia,
+        monto: meses.length ? round2(r.monto / meses.length) : undefined
+      });
     }
+    ctx.invalidarCuentas();
     return reporteDTO(ctx, ctx.db.get('Reportes_Pago', r.id));
+  });
+
+  /** Estado de cuenta: cuadrícula de meses e historial de pagos reportados. */
+  action('getEstadoCuenta', ['admin', 'representante', 'estudiante'], function (ctx, p) {
+    var est = ctx.estudianteVisible(ctx.is('estudiante') ? ctx.user.id : str(p.estudiante_id));
+    var periodo = ctx.periodo();
+    var grado = ctx.db.get('Grados', est.grado_id);
+    var c = ctx.cuenta(est.id, periodo);
+    return {
+      estudiante: { id: est.id, nombre: est.nombre, cedula: est.cedula, grado: grado ? grado.nombre : '' },
+      periodo: pick(periodo, ['id', 'nombre']),
+      cuenta: c,
+      reportes: (ctx.db.index('Reportes_Pago', 'estudiante_id')[est.id] || []).slice()
+        .sort(function (a, b) { return b.creado.localeCompare(a.creado); })
+        .map(function (r) { return reporteDTO(ctx, r); })
+    };
+  });
+
+  /** Datos de la constancia de solvencia (solo si el estudiante está solvente). */
+  action('getConstanciaSolvencia', ['admin', 'representante', 'estudiante'], function (ctx, p) {
+    var est = ctx.estudianteVisible(ctx.is('estudiante') ? ctx.user.id : str(p.estudiante_id));
+    var periodo = ctx.periodo();
+    var c = ctx.cuenta(est.id, periodo);
+    assert(c.estado === 'solvente', 'El estudiante no está solvente. La constancia se emite cuando todos los meses exigibles están pagados.', 'MOROSO');
+    var grado = ctx.db.get('Grados', est.grado_id);
+    var reps = ctx.representantesDe(est.id);
+    var hoy = fechaVE(ctx.adapter.now());
+    return {
+      institucion: ctx.config(),
+      estudiante: { id: est.id, nombre: est.nombre, cedula: est.cedula },
+      grado: grado ? pick(grado, ['nombre', 'seccion']) : null,
+      representante: reps.length ? { nombre: reps[0].nombre, cedula: reps[0].cedula } : null,
+      periodo: pick(periodo, ['id', 'nombre']),
+      cuenta: c,
+      fecha_emision: hoy.iso,
+      codigo: codigoConstancia(ctx.adapter, est.cedula, hoy.iso)
+    };
+  });
+
+  /** Verificación pública de una constancia (p. ej. desde otro colegio). */
+  action('verificarConstancia', null, function (ctx, p) {
+    var codigo = str(p.codigo).toUpperCase();
+    var m = codigo.match(/^(\d{5,10})-(\d{8})-([0-9A-F]{8})$/);
+    if (!m) return { valido: false };
+    var fecha = m[2].slice(0, 4) + '-' + m[2].slice(4, 6) + '-' + m[2].slice(6, 8);
+    if (codigoConstancia(ctx.adapter, m[1], fecha) !== codigo) return { valido: false };
+    var est = ctx.db.where('Usuarios', function (u) { return u.cedula === m[1] && u.rol === 'estudiante'; })[0];
+    return { valido: !!est, estudiante: est ? est.nombre : null, fecha_emision: fecha, solvente_hoy: est ? ctx.estadoPago(est.id) === 'solvente' : false };
   });
 
   // — Representante —
@@ -1076,17 +1385,20 @@ var SCE = (function () {
     var banco = str(p.banco);
     var monto = Number(p.monto);
     var fecha = str(p.fecha_pago);
+    var meses = validarMeses(ctx, est, p.meses);
     assert(/^[0-9A-Za-z-]{4,30}$/.test(referencia), 'La referencia debe tener entre 4 y 30 caracteres alfanuméricos.');
     assert(BANCOS.indexOf(banco) >= 0, 'Seleccione el banco o método de pago.');
     assert(isFinite(monto) && monto > 0 && monto < 1e9, 'Indique un monto válido.');
     assert(isIsoDate(fecha), 'Indique la fecha del pago.');
-    assert(fecha <= ctx.today(), 'La fecha del pago no puede ser futura.');
+    assert(fecha <= fechaVE(ctx.adapter.now()).iso, 'La fecha del pago no puede ser futura.');
     var dup = ctx.db.where('Reportes_Pago', function (r) { return r.referencia === referencia && r.banco === banco && r.estado !== 'rechazado'; });
     assert(!dup.length, 'Ya existe un reporte con esa referencia.');
     var row = ctx.db.insert('Reportes_Pago', {
       estudiante_id: est.id, representante_id: ctx.user.id, referencia: referencia, banco: banco,
-      monto: round2(monto), fecha_pago: fecha, estado: 'pendiente', creado: ctx.stamp(), revisado_por: '', observacion: ''
+      monto: round2(monto), fecha_pago: fecha, estado: 'pendiente', creado: ctx.stamp(), revisado_por: '', observacion: '',
+      meses: meses.join(','), fecha_revision: ''
     })[0];
+    ctx.invalidarCuentas();
     return reporteDTO(ctx, row);
   });
 
@@ -1101,17 +1413,17 @@ var SCE = (function () {
     var grados = indexBy(ctx.db.all('Grados'), 'id');
     var pend = groupBy(ctx.db.where('Reportes_Pago', function (r) { return r.estado === 'pendiente' && r.representante_id === ctx.user.id; }), 'estudiante_id');
     return ctx.hijosDe(ctx.user.id).map(function (h) {
-      var estado = ctx.estadoPago(h.id);
+      var c = ctx.cuenta(h.id, periodo);
       var asis = resumenAsistenciaEstudiante(ctx, h, periodo);
       var out = {
         id: h.id, nombre: h.nombre, cedula: h.cedula,
         grado: grados[h.grado_id] ? grados[h.grado_id].nombre : '',
-        estado_pago: estado,
+        estado_pago: c.estado, vencidos: c.vencidos, deuda: c.deuda, moneda: c.moneda,
         inasistencia_pct: asis.pct,
         reportes_pendientes: (pend[h.id] || []).length,
         promedio: null
       };
-      if (estado !== 'moroso') out.promedio = buildInforme(ctx, h, periodo).promedio_general;
+      if (c.estado !== 'moroso') out.promedio = buildInforme(ctx, h, periodo).promedio_general;
       return out;
     });
   });
@@ -1137,6 +1449,7 @@ var SCE = (function () {
         grado: grado ? { id: grado.id, nombre: grado.nombre } : null,
         periodo: pick(periodo, ['id', 'nombre', 'lapso_activo', 'estado']),
         asistencia: resumenAsistenciaEstudiante(ctx, est, periodo),
+        cuenta: { vencidos: ctx.cuenta(est.id).vencidos.map(nombreMes), deuda: ctx.cuenta(est.id).deuda, moneda: cfg.moneda },
         contacto: { telefono: cfg.telefono, email: cfg.email, nombre: cfg.nombre }
       };
     }
@@ -1317,16 +1630,16 @@ var SCE = (function () {
     var fecha = str(p.fecha);
     assert(isIsoDate(fecha), 'Fecha inválida.');
     var registros = {};
-    ctx.db.where('Asistencia', function (a) {
-      return a.materia_id === m.id && a.periodo_id === periodo.id && a.fecha === fecha;
-    }).forEach(function (a) { registros[a.estudiante_id] = a.estado; });
+    (ctx.db.index('Asistencia', 'materia_id')[m.id] || []).forEach(function (a) {
+      if (a.periodo_id === periodo.id && a.fecha === fecha && a.estado !== 'presente') registros[a.estudiante_id] = a.estado;
+    });
     var fechas = {};
-    ctx.db.where('Asistencia', function (a) {
-      return a.materia_id === m.id && a.periodo_id === periodo.id && a.lapso === periodo.lapso_activo;
-    }).forEach(function (a) { fechas[a.fecha] = true; });
+    (ctx.db.index('Clases', 'materia_id')[m.id] || []).forEach(function (c) {
+      if (c.periodo_id === periodo.id && c.lapso === periodo.lapso_activo) fechas[c.fecha] = true;
+    });
     return {
       fecha: fecha,
-      registrada: Object.keys(registros).length > 0,
+      registrada: !!fechas[fecha] || Object.keys(registros).length > 0,
       estudiantes: ctx.estudiantesDeGrado(m.grado_id).map(function (u) {
         return { id: u.id, nombre: u.nombre, cedula: u.cedula, estado: registros[u.id] || 'presente' };
       }),
@@ -1345,17 +1658,23 @@ var SCE = (function () {
     var alumnos = indexBy(ctx.estudiantesDeGrado(m.grado_id), 'id');
     var registros = Array.isArray(p.registros) ? p.registros : [];
     assert(registros.length, 'No hay registros de asistencia.');
-    var existentes = indexBy(ctx.db.where('Asistencia', function (a) {
-      return a.materia_id === m.id && a.periodo_id === periodo.id && a.fecha === fecha;
+    var clase = (ctx.db.index('Clases', 'materia_id')[m.id] || []).filter(function (c) { return c.periodo_id === periodo.id && c.fecha === fecha; })[0];
+    if (!clase) ctx.db.insert('Clases', { materia_id: m.id, periodo_id: periodo.id, lapso: periodo.lapso_activo, fecha: fecha });
+    var lapso = clase ? clase.lapso : periodo.lapso_activo;
+    var existentes = indexBy((ctx.db.index('Asistencia', 'materia_id')[m.id] || []).filter(function (a) {
+      return a.periodo_id === periodo.id && a.fecha === fecha;
     }), 'estudiante_id');
-    var nuevos = [], cambios = [];
+    var nuevos = [], cambios = [], borrar = [];
     registros.forEach(function (r) {
       var id = str(r.estudiante_id);
       assert(alumnos[id], 'Un estudiante no pertenece a esta materia.');
       assert(['presente', 'ausente', 'justificado'].indexOf(r.estado) >= 0, 'Estado de asistencia inválido.');
-      if (existentes[id]) cambios.push({ key: existentes[id].id, patch: { estado: r.estado } });
-      else nuevos.push({ materia_id: m.id, periodo_id: periodo.id, lapso: periodo.lapso_activo, fecha: fecha, estudiante_id: id, estado: r.estado });
+      var prev = existentes[id];
+      if (r.estado === 'presente') { if (prev) borrar.push(prev.id); return; }
+      if (prev) { if (prev.estado !== r.estado) cambios.push({ key: prev.id, patch: { estado: r.estado } }); }
+      else nuevos.push({ materia_id: m.id, periodo_id: periodo.id, lapso: lapso, fecha: fecha, estudiante_id: id, estado: r.estado });
     });
+    ctx.db.remove('Asistencia', borrar);
     ctx.db.updateMany('Asistencia', cambios);
     ctx.db.insert('Asistencia', nuevos);
     return A.getAttendance.fn(ctx, { materia_id: m.id, fecha: fecha });
@@ -1569,6 +1888,10 @@ var SCE = (function () {
     handle: handle,
     hashPassword: hashPassword,
     calcLapso: calcLapso,
+    isWrite: function (name) { return ESCRITURAS.indexOf(name) >= 0; },
+    CONFIG_INFO: CONFIG_INFO,
+    mesesDelPeriodo: mesesDelPeriodo,
+    fechaVE: fechaVE,
     calcDefinitiva: calcDefinitiva,
     redondear: redondear,
     isoDate: isoDate,
@@ -1618,12 +1941,12 @@ var SCE_SEED = (function () {
 
     var T = {
       Config: [], Periodos: [], Grados: [], Usuarios: [], Relacion_Familiar: [], Materias_Asignadas: [],
-      PlanesEvaluacion: [], Notas: [], Asistencia: [], Pagos: [], Reportes_Pago: [], Avisos: [],
+      PlanesEvaluacion: [], Notas: [], Clases: [], Asistencia: [], Pagos: [], Mensualidades: [], Reportes_Pago: [], Avisos: [],
       Rasgos: [], Materias_Pendientes: [], Promociones: []
     };
 
     Object.keys(SCE.CONFIG_DEFAULTS).forEach(function (k) {
-      T.Config.push({ clave: k, valor: SCE.CONFIG_DEFAULTS[k] });
+      T.Config.push({ clave: k, valor: SCE.CONFIG_DEFAULTS[k], descripcion: SCE.CONFIG_INFO[k] || '' });
     });
     T.Config.forEach(function (c) { if (c.clave === 'director') c.valor = 'Lcda. Carmen Villalobos'; });
 
@@ -1720,15 +2043,34 @@ var SCE_SEED = (function () {
       }
     }
 
-    // Solvencia
+    // Solvencia: mensualidades pagadas hasta hoy (los morosos deben el último mes exigible)
     var morosos = { 'est-moroso': true };
     estudiantes.forEach(function (e, i) { if (e.id !== 'est-demo' && e.id !== 'est-sofia' && i % 7 === 4) morosos[e.id] = true; });
-    estudiantes.forEach(function (e) {
-      T.Pagos.push({
-        estudiante_id: e.id, estado_pago: morosos[e.id] ? 'moroso' : 'solvente',
-        ultima_actualizacion: stamp, observaciones: morosos[e.id] ? 'Mensualidad del mes en curso pendiente.' : ''
+    var cfgSeed = {};
+    T.Config.forEach(function (c) { cfgSeed[c.clave] = c.valor; });
+    var hoyVE = SCE.fechaVE(now.getTime());
+    var limiteSeed = Number(cfgSeed.dia_limite_pago) || 5;
+    var mesesPer = SCE.mesesDelPeriodo(periodoNombre, cfgSeed);
+    var exigibles = mesesPer.filter(function (m) { return m < hoyVE.mes || (m === hoyVE.mes && hoyVE.d > limiteSeed); });
+    var mesActual = mesesPer.indexOf(hoyVE.mes) >= 0 ? hoyVE.mes : null;
+    var adeudados = {};
+    var mN = 0;
+    estudiantes.forEach(function (e, i) {
+      T.Pagos.push({ estudiante_id: e.id, condicion: 'regular', ultima_actualizacion: stamp, observaciones: '' });
+      var pagar = exigibles.slice();
+      if (morosos[e.id] && pagar.length) adeudados[e.id] = pagar.splice(pagar.length - (pagar.length > 1 && i % 2 ? 2 : 1));
+      if (!morosos[e.id] && mesActual && exigibles.indexOf(mesActual) < 0 && i % 2 === 0) pagar.push(mesActual);
+      pagar.forEach(function (mes) {
+        var dia = new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)) - 1, 2 + (i % 3));
+        var fv = new Date(Math.min(dia.getTime(), now.getTime() - dayMs));
+        T.Mensualidades.push({
+          id: id('me', ++mN), estudiante_id: e.id, periodo_id: P, mes: mes, monto: Number(cfgSeed.mensualidad_monto) || 85,
+          metodo: i % 5 === 0 ? 'caja' : 'transferencia', reporte_id: '', referencia: i % 5 === 0 ? 'Caja' : 'Pago Móvil ' + String(100000 + ((i * 7919 + mN * 104729) % 899999)),
+          verificado_por: 'usr-admin', fecha_verificacion: fv.toISOString()
+        });
       });
     });
+    var mesesDeudaDe = function (e) { return adeudados[e.id] || (mesActual ? [mesActual] : mesesPer.slice(0, 1)); };
 
     // Planes de evaluación, notas y asistencia
     var planL1 = [['Prueba diagnóstica', 'Prueba corta', 15, -112], ['Taller en clase', 'Taller', 20, -98], ['Examen parcial', 'Examen', 25, -84], ['Proyecto grupal', 'Proyecto', 15, -70], ['Examen final de lapso', 'Examen', 25, -58]];
@@ -1738,7 +2080,7 @@ var SCE_SEED = (function () {
     var faltones = {};
     estudiantes.forEach(function (e, i) { if (i % 11 === 6) faltones[e.id] = true; });
 
-    var evN = 0, nN = 0, aN = 0;
+    var evN = 0, nN = 0, aN = 0, cN = 0;
     var nota = function (hab) {
       var v = hab + (rnd() - 0.5) * 6;
       return Math.max(1, Math.min(20, Math.round(v)));
@@ -1760,11 +2102,12 @@ var SCE_SEED = (function () {
       [[1, diasL1], [2, diasL2]].forEach(function (pl) {
         pl[1].forEach(function (d) {
           var fecha = weekday(d);
+          T.Clases.push({ id: id('cl', ++cN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha });
           alumnos.forEach(function (a) {
             var p = faltones[a.id] ? 0.36 : 0.06;
             var r = rnd();
-            var estado = r < p ? (r < p * 0.25 ? 'justificado' : 'ausente') : 'presente';
-            T.Asistencia.push({ id: id('as', ++aN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha, estudiante_id: a.id, estado: estado });
+            if (r >= p) return; // presente: no se guarda
+            T.Asistencia.push({ id: id('as', ++aN), materia_id: m.id, periodo_id: P, lapso: pl[0], fecha: fecha, estudiante_id: a.id, estado: r < p * 0.25 ? 'justificado' : 'ausente' });
           });
         });
       });
@@ -1780,20 +2123,37 @@ var SCE_SEED = (function () {
     });
 
     // Reportes de pago
+    var monto1 = Number(cfgSeed.mensualidad_monto) || 85;
+    var mesesDiego = mesesDeudaDe(diego);
     T.Reportes_Pago.push({
       id: 'rp-1', estudiante_id: diego.id, representante_id: repSalazar.id, referencia: '00482917', banco: 'Banesco',
-      monto: 85, fecha_pago: iso(-2), estado: 'pendiente', creado: new Date(now.getTime() - 2 * dayMs).toISOString(), revisado_por: '', observacion: ''
+      monto: monto1 * mesesDiego.length, fecha_pago: iso(-1), estado: 'pendiente', creado: new Date(now.getTime() - dayMs).toISOString(),
+      revisado_por: '', observacion: '', meses: mesesDiego.join(','), fecha_revision: ''
     });
+    var sofiaMes = T.Mensualidades.filter(function (m) { return m.estudiante_id === sofia.id; })[0];
+    if (sofiaMes) {
+      sofiaMes.reporte_id = 'rp-2';
+      sofiaMes.referencia = 'Pago Móvil 00391004';
+      T.Reportes_Pago.push({
+        id: 'rp-2', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00391004', banco: 'Pago Móvil',
+        monto: monto1, fecha_pago: sofiaMes.fecha_verificacion.slice(0, 10), estado: 'aprobado', creado: sofiaMes.fecha_verificacion,
+        revisado_por: 'usr-admin', observacion: '', meses: sofiaMes.mes, fecha_revision: sofiaMes.fecha_verificacion
+      });
+    }
     T.Reportes_Pago.push({
-      id: 'rp-2', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00391004', banco: 'Pago Móvil',
-      monto: 85, fecha_pago: iso(-33), estado: 'aprobado', creado: new Date(now.getTime() - 33 * dayMs).toISOString(), revisado_por: 'usr-admin', observacion: ''
+      id: 'rp-4', estudiante_id: sofia.id, representante_id: repSalazar.id, referencia: '00377120', banco: 'Banesco',
+      monto: monto1, fecha_pago: iso(-40), estado: 'rechazado', creado: new Date(now.getTime() - 40 * dayMs).toISOString(),
+      revisado_por: 'usr-admin', observacion: 'La referencia no aparece en el estado de cuenta bancario. Verifique el número y vuelva a reportar.',
+      meses: mesesPer[0], fecha_revision: new Date(now.getTime() - 39 * dayMs).toISOString()
     });
     var otroMoroso = estudiantes.filter(function (e) { return morosos[e.id] && e.id !== diego.id; })[0];
     if (otroMoroso) {
       var relO = T.Relacion_Familiar.filter(function (r) { return r.estudiante_id === otroMoroso.id; })[0];
+      var mesesO = mesesDeudaDe(otroMoroso);
       T.Reportes_Pago.push({
         id: 'rp-3', estudiante_id: otroMoroso.id, representante_id: relO.representante_id, referencia: '7719203', banco: 'Mercantil',
-        monto: 85, fecha_pago: iso(-1), estado: 'pendiente', creado: new Date(now.getTime() - dayMs).toISOString(), revisado_por: '', observacion: ''
+        monto: monto1 * mesesO.length, fecha_pago: iso(0), estado: 'pendiente', creado: now.toISOString(),
+        revisado_por: '', observacion: '', meses: mesesO.join(','), fecha_revision: ''
       });
     }
 
@@ -1875,7 +2235,11 @@ function sheetsAdapter_() {
     return t.headers.map(function (h) { return row[h] === undefined ? '' : row[h]; });
   }
 
+  var scriptCache = CacheService.getScriptCache();
+
   return {
+    cacheGet: function (k) { return scriptCache.get(k); },
+    cachePut: function (k, v, seg) { scriptCache.put(k, v, seg); },
     now: function () { return Date.now(); },
     uuid: function () { return Utilities.getUuid(); },
     sha256: function (s) {
@@ -1925,6 +2289,8 @@ function jsonOut_(obj) {
 }
 
 function dispatch_(request) {
+  // Las lecturas no hacen cola: solo las escrituras toman el candado.
+  if (!SCE.isWrite(request && request.action)) return SCE.handle(sheetsAdapter_(), request);
   var lock = LockService.getScriptLock();
   var locked = lock.tryLock(25000);
   if (!locked) return { ok: false, error: { code: 'OCUPADO', message: 'El servidor está ocupado. Intente de nuevo en unos segundos.' } };
@@ -1974,6 +2340,18 @@ function setupDatabase() {
   if (def && ss.getSheets().length > 1 && def.getLastRow() === 0) ss.deleteSheet(def);
 
   var adapter = sheetsAdapter_();
+  // Apartado de configuración: todas las claves con su descripción, editables en la pestaña Config.
+  var cfgActual = {};
+  adapter.readAll('Config').forEach(function (r) { cfgActual[String(r.clave)] = true; });
+  var faltantes = Object.keys(SCE.CONFIG_DEFAULTS).filter(function (k) { return !cfgActual[k]; });
+  if (faltantes.length) {
+    adapter.append('Config', faltantes.map(function (k) {
+      return { clave: k, valor: SCE.CONFIG_DEFAULTS[k], descripcion: SCE.CONFIG_INFO[k] || '' };
+    }));
+  }
+  var shCfg = ss.getSheetByName('Config');
+  shCfg.setColumnWidth(1, 170); shCfg.setColumnWidth(2, 280); shCfg.setColumnWidth(3, 520);
+
   var db = { periodos: adapter.readAll('Periodos'), grados: adapter.readAll('Grados'), usuarios: adapter.readAll('Usuarios') };
   var now = new Date();
   if (!db.periodos.length) {
@@ -2014,4 +2392,30 @@ function seedDemoData() {
     }));
   });
   Logger.log('Datos de demostración cargados. Contraseña de todas las cuentas: ' + SCE_SEED.DEMO_PASSWORD);
+}
+
+/**
+ * Respaldo: copia la hoja completa a la carpeta "Respaldos SCE" de Drive y
+ * conserva las últimas 30 copias. Ejecute instalarRespaldoDiario() una vez.
+ */
+function respaldoDiario() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var nombre = 'Respaldos SCE';
+  var it = DriveApp.getFoldersByName(nombre);
+  var carpeta = it.hasNext() ? it.next() : DriveApp.createFolder(nombre);
+  var stamp = Utilities.formatDate(new Date(), 'America/Caracas', 'yyyy-MM-dd HH.mm');
+  DriveApp.getFileById(ss.getId()).makeCopy(ss.getName() + ' · ' + stamp, carpeta);
+  var copias = [];
+  var files = carpeta.getFiles();
+  while (files.hasNext()) copias.push(files.next());
+  copias.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
+  copias.slice(30).forEach(function (f) { f.setTrashed(true); });
+}
+
+function instalarRespaldoDiario() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'respaldoDiario') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('respaldoDiario').timeBased().everyDays(1).atHour(2).create();
+  Logger.log('Respaldo diario programado (2:00 a. m.).');
 }

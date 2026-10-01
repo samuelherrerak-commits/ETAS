@@ -47,6 +47,14 @@ export function gradePill(n, { lg = false, title } = {}) {
   return h(`span.grade.${gradeClass(n)}${lg ? '.grade-lg' : ''}`, { title }, nota(n));
 }
 
+/** Marca institucional: el logo configurado o, si no hay, el ícono del sistema. */
+export function brandMark(logo, { size } = {}) {
+  const style = size ? { width: `${size}px`, height: `${size}px` } : null;
+  return logo
+    ? h('div.brand-mark.has-logo', { style }, h('img', { src: logo, alt: '' }))
+    : h('div.brand-mark', { style }, icon('cap'));
+}
+
 export function avatar(name, { lg = false } = {}) {
   return h(`span.avatar${lg ? '.avatar-lg' : ''}`, { 'aria-hidden': 'true' }, initials(name));
 }
@@ -243,7 +251,7 @@ export function errorState(err, retry) {
 }
 
 /** Pantalla institucional de bloqueo por morosidad. */
-export function lockState({ contacto = {}, nombre, action } = {}) {
+export function lockState({ contacto = {}, nombre, action, detalle } = {}) {
   return h('div.card.lock.enter', { role: 'status' },
     h('div.lock-seal', icon('lock')),
     h('div.eyebrow', 'Solvencia administrativa requerida'),
@@ -251,6 +259,7 @@ export function lockState({ contacto = {}, nombre, action } = {}) {
     h('p', nombre
       ? `Las calificaciones y el boletín de ${nombre} estarán disponibles en cuanto la administración registre la solvencia de su cuenta.`
       : 'Sus calificaciones y su boletín estarán disponibles en cuanto la administración registre la solvencia de su cuenta.'),
+    detalle ? h('div.badge.badge-red', { style: { height: 'auto', padding: '6px 12px', whiteSpace: 'normal' } }, detalle) : null,
     h('div.lock-contact',
       contacto.nombre ? h('span', icon('landmark'), contacto.nombre) : null,
       contacto.telefono ? h('span', icon('phone'), contacto.telefono) : null,

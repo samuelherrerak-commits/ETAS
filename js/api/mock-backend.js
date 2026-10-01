@@ -6,10 +6,12 @@
  */
 import { sha256, hmacSha256 } from './sha256.js';
 
-const DB_KEY = 'sce.demo.db.v1';
+const DB_KEY = 'sce.demo.db.v2'; // v2: mensualidades y asistencia dispersa
 const SECRET_KEY = 'sce.demo.secret';
 
 let backend = null;
+
+try { localStorage.removeItem('sce.demo.db.v1'); } catch { /* sin almacenamiento */ }
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -59,7 +61,10 @@ function createLocalAdapter() {
   };
   const keyIndex = (table, key) => window.SCE.SCHEMA[table].cols.indexOf(key);
 
+  const memCache = new Map(); // equivalente a CacheService (límite de intentos de login)
   const adapter = {
+    cacheGet: (k) => { const e = memCache.get(k); return e && e.exp > Date.now() ? e.v : null; },
+    cachePut: (k, v, seg) => memCache.set(k, { v, exp: Date.now() + seg * 1000 }),
     now: () => Date.now(),
     uuid: randomId,
     sha256,

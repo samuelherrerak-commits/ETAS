@@ -2,6 +2,7 @@ import { h, icon, append, replace } from './lib/dom.js';
 import { router } from './lib/router.js';
 import { store } from './lib/store.js';
 import { api } from './api/client.js';
+import { applyTheme } from './lib/theme.js';
 import { mountShell, unmountShell, showPage, homeFor } from './ui/shell.js';
 import { confirmDialog } from './ui/modal.js';
 import { toast } from './ui/toast.js';
@@ -10,6 +11,7 @@ import { loginPage } from './pages/login.js';
 
 import { adminOverviewPage } from './pages/admin/overview.js';
 import { periodoPage } from './pages/admin/periodo.js';
+import { configuracionPage } from './pages/admin/configuracion.js';
 import { gradosPage } from './pages/admin/grados.js';
 import { usuariosPage } from './pages/admin/usuarios.js';
 import { finanzasPage } from './pages/admin/finanzas.js';
@@ -20,7 +22,7 @@ import { rasgosPage } from './pages/coord/rasgos.js';
 import { avisosAdminPage, avisosFeedPage } from './pages/shared/avisos.js';
 import { materiasProfesorPage } from './pages/profesor/materias.js';
 import { materiaWorkspacePage } from './pages/profesor/materia.js';
-import { estudianteHomePage, estudianteMateriaPage, estudianteAsistenciaPage, estudianteBoletinPage } from './pages/estudiante/estudiante.js';
+import { estudianteHomePage, estudianteMateriaPage, estudianteAsistenciaPage, estudianteBoletinPage, estudiantePagosPage } from './pages/estudiante/estudiante.js';
 import { representanteHomePage, representanteHijoPage, representantePagosPage } from './pages/representante/representante.js';
 
 const app = document.getElementById('app');
@@ -47,6 +49,7 @@ router.on('/', () => router.navigate(store.user ? homeFor(store.user.rol).slice(
 
 page('/admin', ['admin'], adminOverviewPage);
 page('/admin/periodo', ['admin'], periodoPage);
+page('/admin/configuracion', ['admin'], configuracionPage);
 page('/academico/periodo', ['coordinador'], periodoPage);
 page('/admin/grados', ['admin'], gradosPage);
 page('/admin/usuarios', ['admin'], usuariosPage);
@@ -67,6 +70,7 @@ page('/estudiante', ['estudiante'], estudianteHomePage);
 page('/estudiante/materia/:id', ['estudiante'], estudianteMateriaPage);
 page('/estudiante/asistencia', ['estudiante'], estudianteAsistenciaPage);
 page('/estudiante/boletin', ['estudiante'], estudianteBoletinPage);
+page('/estudiante/pagos', ['estudiante'], estudiantePagosPage);
 
 page('/representante', ['representante'], representanteHomePage);
 page('/representante/hijo/:id', ['representante'], representanteHijoPage);
@@ -124,10 +128,11 @@ async function boot() {
   let info = null;
   try {
     info = await api.get('publicInfo').catch(() => null);
-    if (info) store.setSession({ institucion: info });
+    if (info) { store.setSession({ institucion: info }); applyTheme(info); }
     if (store.token) {
       const session = await api.get('session', {}, { fresh: true });
       store.setSession(session);
+      applyTheme(session.institucion);
     }
   } catch (e) {
     if (e.code !== 'SESION') {
